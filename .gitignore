@@ -1,0 +1,5 @@
+node_modules/
+db/tienda.db
+db/tienda.db-shm
+db/tienda.db-wal
+.env

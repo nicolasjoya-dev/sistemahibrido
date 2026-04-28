@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<meta name="theme-color" content="#0e0f11"/>
+<title>SistemaHíbrido</title>
+<link rel="manifest" href="/manifest.json"/>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;700;800&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet"/>
+<link rel="stylesheet" href="/css/style.css"/>
+</head>
+<body>
+
+<!-- ═══════════════ SIDEBAR ═══════════════ -->
+<aside class="sidebar">
+  <div class="brand">
+    <span class="brand-icon">⬡</span>
+    <span class="brand-name"><strong>Sistema</strong>Híbrido</span>
+  </div>
+  <nav class="nav">
+    <a class="nav-item active" data-tab="dashboard" onclick="switchTab('dashboard',this)">
+      <span class="nav-icon">◈</span><span>Dashboard</span>
+    </a>
+    <a class="nav-item" data-tab="inventario" onclick="switchTab('inventario',this)">
+      <span class="nav-icon">▦</span><span>Inventario</span>
+    </a>
+    <a class="nav-item" data-tab="ventas" onclick="switchTab('ventas',this)">
+      <span class="nav-icon">◎</span><span>Nueva Venta</span>
+    </a>
+    <a class="nav-item" data-tab="calendario" onclick="switchTab('calendario',this)">
+      <span class="nav-icon">▤</span><span>Calendario</span>
+    </a>
+    <a class="nav-item" data-tab="informes" onclick="switchTab('informes',this)">
+      <span class="nav-icon">◑</span><span>Informes</span>
+    </a>
+    <a class="nav-item" data-tab="cierre" onclick="switchTab('cierre',this)">
+      <span class="nav-icon">⬕</span><span>Cierre del Día</span>
+    </a>
+    <a class="nav-item" data-tab="ajustes" onclick="switchTab('ajustes',this)">
+      <span class="nav-icon">◌</span><span>Ajustes</span>
+    </a>
+  </nav>
+  <div class="sidebar-footer">
+    <span id="conn-status">● Online</span>
+  </div>
+</aside>
+
+<!-- ═══════════════ MAIN ═══════════════ -->
+<main class="main">
+
+  <!-- ── DASHBOARD ── -->
+  <div id="tab-dashboard" class="tab active">
+    <div class="page-header">
+      <div><h1>Dashboard</h1><p class="page-sub" id="fecha-hoy"></p></div>
+    </div>
+    <div class="stats-grid" id="dash-stats">
+      <div class="stat-card"><div class="stat-icon teal">▦</div><div class="stat-data"><span class="stat-val" id="d-productos">—</span><span class="stat-label">Productos</span></div></div>
+      <div class="stat-card"><div class="stat-icon blue">◎</div><div class="stat-data"><span class="stat-val" id="d-ventas-hoy">—</span><span class="stat-label">Ventas hoy</span></div></div>
+      <div class="stat-card"><div class="stat-icon green">$</div><div class="stat-data"><span class="stat-val" id="d-total-hoy">—</span><span class="stat-label">Total hoy</span></div></div>
+      <div class="stat-card" id="d-alertas-card"><div class="stat-icon amber">!</div><div class="stat-data"><span class="stat-val" id="d-alertas">—</span><span class="stat-label">Alertas stock</span></div></div>
+    </div>
+    <div class="panel">
+      <div class="panel-title">⚠ Alertas de Stock</div>
+      <div id="dash-alertas-list" style="padding:8px 0"></div>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Ventas de Hoy</div>
+      <table class="data-table" id="dash-ventas-table">
+        <thead><tr><th>#</th><th>Hora</th><th>Productos</th><th>Total</th><th>Acciones</th></tr></thead>
+        <tbody id="dash-ventas-body"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ── INVENTARIO ── -->
+  <div id="tab-inventario" class="tab">
+    <div class="page-header">
+      <div><h1>Inventario</h1><p class="page-sub">Gestión de productos y stock</p></div>
+      <button class="btn-primary" onclick="openModalProducto()">+ Nuevo Producto</button>
+    </div>
+    <div id="inv-msg"></div>
+    <div class="search-bar"><input type="text" id="inv-search" placeholder="Buscar producto…" oninput="filtrarInventario()"/></div>
+    <div class="panel">
+      <table class="data-table" id="inv-table">
+        <thead><tr><th>Nombre</th><th>Categoría</th><th>P. Compra</th><th>P. Venta</th><th>Stock</th><th>Mín.</th><th>Unidad</th><th>Estado</th><th>Acciones</th></tr></thead>
+        <tbody id="inv-body"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ── VENTAS / CARRITO ── -->
+  <div id="tab-ventas" class="tab">
+    <div class="page-header">
+      <div><h1>Nueva Venta</h1><p class="page-sub">Registra una venta</p></div>
+    </div>
+    <div id="venta-msg"></div>
+    <div style="display:grid;grid-template-columns:1fr 360px;gap:24px;align-items:start">
+      <!-- Buscador -->
+      <div>
+        <div class="panel" style="margin-bottom:16px;overflow:visible">
+          <div class="panel-title">Agregar Producto</div>
+          <div style="padding:20px">
+            <div class="form-group">
+              <label>Buscar por nombre o código de barras</label>
+              <div style="position:relative;width:100%">
+                <input type="text" id="venta-buscar" placeholder="Escribir nombre o escanear código…" oninput="buscarProductoVenta()" autocomplete="off" style="width:100%"/>
+                <div id="venta-sugerencias"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <!-- Carrito -->
+      <div class="panel" style="position:sticky;top:24px">
+        <div class="panel-title">Carrito</div>
+        <div id="carrito-items" style="padding:0 0 8px"></div>
+        <div style="padding:16px 20px;border-top:1px solid var(--border)">
+          <div style="display:flex;justify-content:space-between;margin-bottom:10px;font-size:0.9rem">
+            <span style="color:var(--muted)">Subtotal</span><span id="cart-sub">$0</span>
+          </div>
+          <div class="form-group" style="margin-bottom:10px">
+            <label>Descuento</label>
+            <div style="display:flex;gap:8px">
+              <input type="number" id="cart-descuento" placeholder="0" min="0" style="flex:1" oninput="recalcCarrito()"/>
+              <select id="cart-desc-tipo" onchange="recalcCarrito()" style="width:80px">
+                <option value="monto">$</option>
+                <option value="pct">%</option>
+              </select>
+            </div>
+          </div>
+          <div style="display:flex;justify-content:space-between;font-family:var(--font-head);font-size:1.2rem;font-weight:800;margin-bottom:14px">
+            <span>TOTAL</span><span id="cart-total" style="color:var(--teal)">$0</span>
+          </div>
+          <div class="form-group">
+            <label>Efectivo recibido</label>
+            <input type="number" id="cart-efectivo" placeholder="0" oninput="calcVuelto()"/>
+          </div>
+          <div style="display:flex;justify-content:space-between;margin-bottom:16px;font-size:0.95rem">
+            <span style="color:var(--muted)">Vuelto</span>
+            <span id="cart-vuelto" style="color:var(--green);font-weight:700">—</span>
+          </div>
+          <button class="btn-primary full-width" onclick="confirmarVenta()">Confirmar Venta</button>
+          <button class="btn-secondary" style="width:100%;margin-top:8px" onclick="limpiarCarrito()">Limpiar</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── CALENDARIO ── -->
+  <div id="tab-calendario" class="tab">
+    <div class="page-header">
+      <div><h1>Calendario de Ventas</h1><p class="page-sub">Resumen mensual</p></div>
+      <div style="display:flex;gap:10px;align-items:center">
+        <button class="btn-secondary" onclick="cambiarMes(-1)">‹</button>
+        <span id="cal-label" style="font-family:var(--font-head);font-weight:700;font-size:1rem"></span>
+        <button class="btn-secondary" onclick="cambiarMes(1)">›</button>
+      </div>
+    </div>
+    <div class="panel" style="padding:20px">
+      <div id="cal-grid"></div>
+    </div>
+    <div id="cal-detalle" style="display:none">
+      <div class="panel">
+        <div class="panel-title" id="cal-detalle-titulo">Ventas del día</div>
+        <table class="data-table">
+          <thead><tr><th>#</th><th>Hora</th><th>Productos</th><th>Descuento</th><th>Total</th><th>Factura</th></tr></thead>
+          <tbody id="cal-detalle-body"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── INFORMES ── -->
+  <div id="tab-informes" class="tab">
+    <div class="page-header">
+      <div><h1>Informes</h1><p class="page-sub">Análisis de ventas por período</p></div>
+    </div>
+    <div class="panel form-panel" style="margin-bottom:20px">
+      <div class="form-row">
+        <div class="form-group">
+          <label>Desde</label>
+          <input type="date" id="inf-desde"/>
+        </div>
+        <div class="form-group">
+          <label>Hasta</label>
+          <input type="date" id="inf-hasta"/>
+        </div>
+        <div class="form-group" style="justify-content:flex-end;padding-top:24px">
+          <button class="btn-primary" onclick="cargarInformes()">Consultar</button>
+        </div>
+      </div>
+    </div>
+    <div id="inf-resumen" style="display:none" class="stats-grid" style="margin-bottom:20px">
+      <div class="stat-card"><div class="stat-icon blue">◎</div><div class="stat-data"><span class="stat-val" id="inf-num">0</span><span class="stat-label">Ventas</span></div></div>
+      <div class="stat-card"><div class="stat-icon green">$</div><div class="stat-data"><span class="stat-val" id="inf-total">$0</span><span class="stat-label">Total período</span></div></div>
+    </div>
+    <div id="inf-lista"></div>
+  </div>
+
+  <!-- ── CIERRE ── -->
+  <div id="tab-cierre" class="tab">
+    <div class="page-header">
+      <div><h1>Cierre del Día</h1><p class="page-sub">Resumen y ganancias</p></div>
+      <button class="btn-primary" onclick="ejecutarCierre()">Ejecutar Cierre</button>
+    </div>
+    <div id="cierre-resultado" style="display:none">
+      <div class="stats-grid" id="cierre-stats"></div>
+      <div class="panel">
+        <div class="panel-title">Desglose por Producto</div>
+        <table class="data-table">
+          <thead><tr><th>Producto</th><th>Unidades Vendidas</th><th>Ganancia</th></tr></thead>
+          <tbody id="cierre-detalle-body"></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="panel" style="margin-top:24px">
+      <div class="panel-title">Historial de Cierres</div>
+      <table class="data-table">
+        <thead><tr><th>Fecha</th><th>Ventas</th><th>Transacciones</th><th>Ganancia</th></tr></thead>
+        <tbody id="cierre-historial-body"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ── AJUSTES ── -->
+  <div id="tab-ajustes" class="tab">
+    <div class="page-header">
+      <div><h1>Ajustes</h1><p class="page-sub">Datos del negocio para facturas</p></div>
+    </div>
+    <div id="ajustes-msg"></div>
+    <div class="panel form-panel" style="max-width:540px">
+      <div class="form-group">
+        <label>Nombre del Negocio</label>
+        <input type="text" id="aj-nombre" placeholder="Mi Miscelánea"/>
+      </div>
+      <div class="form-group">
+        <label>Dirección</label>
+        <input type="text" id="aj-direccion" placeholder="Calle Principal #123"/>
+      </div>
+      <div class="form-group">
+        <label>Teléfono</label>
+        <input type="text" id="aj-telefono" placeholder="310 000 0000"/>
+      </div>
+      <button class="btn-primary" onclick="guardarAjustes()">Guardar Ajustes</button>
+    </div>
+  </div>
+
+</main>
+
+<!-- ═══════════════ MODAL PRODUCTO ═══════════════ -->
+<div class="modal-overlay" id="modal-producto">
+  <div class="modal">
+    <div class="modal-header">
+      <h2 id="modal-titulo">Nuevo Producto</h2>
+      <button class="modal-close" onclick="closeModal('modal-producto')">✕</button>
+    </div>
+    <div id="modal-msg"></div>
+    <div class="form-row">
+      <div class="form-group"><label>Nombre *</label><input type="text" id="p-nombre"/></div>
+      <div class="form-group"><label>Categoría</label><input type="text" id="p-categoria"/></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>Precio Compra</label><input type="number" id="p-compra" min="0" oninput="calcPrecioSugerido()"/></div>
+      <div class="form-group">
+        <label>Margen de Ganancia (%)</label>
+        <input type="number" id="p-margen" min="0" placeholder="ej: 30" oninput="calcPrecioSugerido()"/>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Precio Venta *
+          <span id="p-venta-sugerido" style="font-size:0.78rem;color:var(--teal);margin-left:8px;font-weight:600"></span>
+        </label>
+        <input type="number" id="p-venta" min="0"/>
+      </div>
+      <div class="form-group" style="align-self:flex-end;padding-bottom:4px">
+        <button type="button" class="btn-secondary" style="width:100%" onclick="aplicarPrecioSugerido()">↑ Usar sugerido</button>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>Stock Actual</label><input type="number" id="p-stock" min="0"/></div>
+      <div class="form-group"><label>Stock Mínimo</label><input type="number" id="p-stockmin" value="5" min="0"/></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>Código de Barras</label><input type="text" id="p-barras"/></div>
+      <div class="form-group"><label>Unidad</label>
+        <select id="p-unidad">
+          <option>unidades</option><option>metros</option><option>kilos</option><option>litros</option><option>pares</option><option>cajas</option>
+        </select>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-secondary" onclick="closeModal('modal-producto')">Cancelar</button>
+      <button class="btn-primary" id="modal-save-btn" onclick="guardarProducto()">Guardar</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════ MODAL ENTRADA INVENTARIO ═══════════════ -->
+<div class="modal-overlay" id="modal-entrada">
+  <div class="modal">
+    <div class="modal-header">
+      <h2>Entrada de Inventario</h2>
+      <button class="modal-close" onclick="closeModal('modal-entrada')">✕</button>
+    </div>
+    <p id="entrada-prod-nombre" style="color:var(--teal);font-weight:600;margin-bottom:16px"></p>
+    <div class="form-group"><label>Cantidad a ingresar</label><input type="number" id="ent-cantidad" min="1"/></div>
+    <div class="form-group"><label>Precio de Compra (opcional, actualiza el registrado)</label><input type="number" id="ent-precio" min="0" oninput="calcEntradaSugerido()"/></div>
+    <div class="form-row" style="align-items:flex-end">
+      <div class="form-group">
+        <label>Margen de Ganancia (%)
+          <span id="ent-venta-sugerido" style="font-size:0.78rem;color:var(--teal);margin-left:6px;font-weight:600"></span>
+        </label>
+        <input type="number" id="ent-margen" min="0" placeholder="ej: 30" oninput="calcEntradaSugerido()"/>
+      </div>
+      <div class="form-group">
+        <button type="button" class="btn-secondary" style="width:100%" onclick="aplicarEntradaSugerido()">↑ Actualizar P. Venta</button>
+      </div>
+    </div>
+    <div class="form-group"><label>Nota</label><input type="text" id="ent-nota" placeholder="Proveedor, lote…"/></div>
+    <div class="panel" style="margin-top:8px">
+      <div class="panel-title" style="font-size:0.85rem">Historial de Entradas</div>
+      <table class="data-table" style="font-size:0.82rem">
+        <thead><tr><th>Fecha</th><th>Cantidad</th><th>P. Compra</th><th>Nota</th></tr></thead>
+        <tbody id="ent-historial-body"></tbody>
+      </table>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-secondary" onclick="closeModal('modal-entrada')">Cancelar</button>
+      <button class="btn-primary" onclick="guardarEntrada()">Registrar Entrada</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════ MODAL CANTIDAD CARRITO ═══════════════ -->
+<div class="modal-overlay" id="modal-cantidad">
+  <div class="modal" style="max-width:340px">
+    <div class="modal-header">
+      <h2 id="mcant-nombre">Agregar al carrito</h2>
+      <button class="modal-close" onclick="closeModal('modal-cantidad')">✕</button>
+    </div>
+    <div class="form-group">
+      <label id="mcant-label">Cantidad (unidades)</label>
+      <input type="number" id="mcant-val" min="0.01" step="0.01" value="1"/>
+    </div>
+    <p style="font-size:0.85rem;color:var(--muted)">Stock disponible: <strong id="mcant-stock" style="color:var(--text)">—</strong></p>
+    <div class="modal-actions">
+      <button class="btn-secondary" onclick="closeModal('modal-cantidad')">Cancelar</button>
+      <button class="btn-primary" onclick="confirmarAgregarCarrito()">Agregar</button>
+    </div>
+  </div>
+</div>
+
+<script src="/js/app.js"></script>
+<script>
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/sw.js').catch(console.error);
+  }
+</script>
+</body>
+</html>

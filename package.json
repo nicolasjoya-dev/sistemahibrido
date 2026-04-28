@@ -1,0 +1,15 @@
+{
+  "name": "sistemahibrido",
+  "version": "1.0.0",
+  "description": "Sistema de inventario y ventas para miscelánea",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "sqlite3": "^5.1.7",
+    "express": "^4.18.2",
+    "pdfkit": "^0.14.0"
+  }
+}
