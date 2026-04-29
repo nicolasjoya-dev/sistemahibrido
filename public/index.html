@@ -10,8 +10,156 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;700;800&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet"/>
 <link rel="stylesheet" href="/css/style.css"/>
+
+<!-- Firebase SDK -->
+<script type="module">
+  import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
+  import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged }
+    from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
+
+  // ── 🔧 CONFIGURA AQUÍ TU PROYECTO FIREBASE ──────────────
+  // Ve a https://console.firebase.google.com → Tu proyecto →
+  // Configuración del proyecto → Tus apps → Web → SDK
+  const firebaseConfig = {
+    apiKey:            "AIzaSyD5xOfspIncKCirWCMiFeGGYsbXvF8iXDk",
+    authDomain:        "hibrido-d3221.firebaseapp.com",
+    projectId:         "hibrido-d3221",
+    storageBucket:     "hibrido-d3221.firebasestorage.app",
+    messagingSenderId: "308590731643",
+    appId:             "1:308590731643:web:91fbc886cdcee87dd65dde",
+    measurementId:     "G-J4EEFEPQBL"
+  };
+
+  const EMAILS_AUTORIZADOS = [
+    "miscelanealafortaleza852@gmail.com",
+    "nico.joya2010@gmail.com"
+  ];
+
+  const app  = initializeApp(firebaseConfig);
+  const auth = getAuth(app);
+  const provider = new GoogleAuthProvider();
+  provider.setCustomParameters({ prompt: 'select_account' });
+
+  // Login
+  window.loginGoogle = async () => {
+    const btn = document.getElementById('login-btn');
+    btn.textContent = 'Conectando…';
+    btn.disabled = true;
+    try {
+      const result = await signInWithPopup(auth, provider);
+      const email = result.user.email;
+      if (EMAILS_AUTORIZADOS.length > 0 && !EMAILS_AUTORIZADOS.includes(email)) {
+        await signOut(auth);
+        document.getElementById('login-error').textContent =
+          `⚠ ${email} no está autorizado para acceder a este sistema.`;
+        btn.textContent = 'Iniciar sesión con Google';
+        btn.disabled = false;
+      }
+    } catch (e) {
+      document.getElementById('login-error').textContent = 'Error al iniciar sesión. Intenta de nuevo.';
+      btn.textContent = 'Iniciar sesión con Google';
+      btn.disabled = false;
+    }
+  };
+
+  // Logout
+  window.cerrarSesion = () => signOut(auth);
+
+  // Observador de estado
+  onAuthStateChanged(auth, (user) => {
+    const loginScreen = document.getElementById('login-screen');
+    const appScreen   = document.getElementById('app-screen');
+    const userInfo    = document.getElementById('user-info');
+    const loginErr    = document.getElementById('login-error');
+    const loginBtn    = document.getElementById('login-btn');
+
+    if (user) {
+      loginScreen.style.display = 'none';
+      appScreen.style.display   = 'flex';
+      if (userInfo) {
+        userInfo.innerHTML = `
+          <img src="${user.photoURL || ''}" alt="" style="width:28px;height:28px;border-radius:50%;object-fit:cover;border:2px solid var(--teal)"/>
+          <span style="font-size:0.8rem;color:var(--muted);max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${user.displayName || user.email}</span>
+          <button onclick="cerrarSesion()" style="background:none;border:1px solid var(--border);border-radius:6px;padding:3px 8px;color:var(--muted);font-size:0.75rem;cursor:pointer">Salir</button>
+        `;
+      }
+    } else {
+      loginScreen.style.display = 'flex';
+      appScreen.style.display   = 'none';
+      if (loginErr) loginErr.textContent = '';
+      if (loginBtn) { loginBtn.textContent = 'Iniciar sesión con Google'; loginBtn.disabled = false; }
+    }
+  });
+</script>
+
+<style>
+/* ── Login Screen ─── */
+#login-screen {
+  position: fixed; inset: 0; z-index: 9999;
+  background: var(--bg, #0e0f11);
+  display: flex; align-items: center; justify-content: center;
+}
+.login-card {
+  background: var(--surface, #16171a);
+  border: 1px solid var(--border, #2a2b2f);
+  border-radius: 20px;
+  padding: 48px 40px;
+  width: 100%; max-width: 380px;
+  text-align: center;
+  box-shadow: 0 24px 64px rgba(0,0,0,0.5);
+}
+.login-logo {
+  font-size: 2.5rem; font-family: var(--font-head, 'Syne', sans-serif);
+  font-weight: 800; margin-bottom: 6px;
+  background: linear-gradient(135deg, #00c9a7, #4facfe);
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+}
+.login-sub { color: var(--muted, #888); font-size: 0.9rem; margin-bottom: 36px; }
+.login-btn-google {
+  width: 100%; padding: 14px 20px;
+  background: #fff; color: #333;
+  border: none; border-radius: 10px;
+  font-size: 0.95rem; font-weight: 600; cursor: pointer;
+  display: flex; align-items: center; justify-content: center; gap: 10px;
+  transition: opacity .2s, transform .1s;
+}
+.login-btn-google:hover  { opacity: .92; }
+.login-btn-google:active { transform: scale(.98); }
+.login-btn-google:disabled { opacity: .6; cursor: not-allowed; }
+.google-icon { width: 20px; height: 20px; flex-shrink: 0; }
+#login-error {
+  margin-top: 14px; font-size: 0.82rem;
+  color: #ff6b6b; min-height: 20px;
+}
+#app-screen { display: none; width: 100%; height: 100vh; }
+#user-info {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 12px; border-top: 1px solid var(--border, #2a2b2f);
+}
+</style>
 </head>
 <body>
+
+<!-- ═══════════════ LOGIN SCREEN ═══════════════ -->
+<div id="login-screen">
+  <div class="login-card">
+    <div class="login-logo">⬡ SistemaHíbrido</div>
+    <p class="login-sub">Sistema de inventario y ventas</p>
+    <button id="login-btn" class="login-btn-google" onclick="loginGoogle()">
+      <svg class="google-icon" viewBox="0 0 24 24">
+        <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+        <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+        <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/>
+        <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+      </svg>
+      Iniciar sesión con Google
+    </button>
+    <div id="login-error"></div>
+  </div>
+</div>
+
+<!-- ═══════════════ APP ═══════════════ -->
+<div id="app-screen">
 
 <!-- ═══════════════ SIDEBAR ═══════════════ -->
 <aside class="sidebar">
@@ -44,6 +192,7 @@
   </nav>
   <div class="sidebar-footer">
     <span id="conn-status">● Online</span>
+    <div id="user-info"></div>
   </div>
 </aside>
 
@@ -99,16 +248,14 @@
     <div style="display:grid;grid-template-columns:1fr 360px;gap:24px;align-items:start">
       <!-- Buscador -->
       <div>
-        <div class="panel" style="margin-bottom:16px;overflow:visible">
+        <div class="panel" style="margin-bottom:16px">
           <div class="panel-title">Agregar Producto</div>
           <div style="padding:20px">
             <div class="form-group">
               <label>Buscar por nombre o código de barras</label>
-              <div style="position:relative;width:100%">
-                <input type="text" id="venta-buscar" placeholder="Escribir nombre o escanear código…" oninput="buscarProductoVenta()" autocomplete="off" style="width:100%"/>
-                <div id="venta-sugerencias"></div>
-              </div>
+              <input type="text" id="venta-buscar" placeholder="Escribir nombre o escanear código…" oninput="buscarProductoVenta()" autocomplete="off"/>
             </div>
+            <div id="venta-sugerencias" style="position:relative"></div>
           </div>
         </div>
       </div>
@@ -262,22 +409,14 @@
       <div class="form-group"><label>Categoría</label><input type="text" id="p-categoria"/></div>
     </div>
     <div class="form-row">
-      <div class="form-group"><label>Precio Compra</label><input type="number" id="p-compra" min="0" oninput="calcPrecioSugerido()"/></div>
-      <div class="form-group">
-        <label>Margen de Ganancia (%)</label>
-        <input type="number" id="p-margen" min="0" placeholder="ej: 30" oninput="calcPrecioSugerido()"/>
-      </div>
+      <div class="form-group"><label>Precio Compra</label><input type="number" id="p-compra" min="0" oninput="calcMargen()"/></div>
+      <div class="form-group"><label>Precio Venta *</label><input type="number" id="p-venta" min="0" oninput="calcMargen()"/></div>
     </div>
-    <div class="form-row">
-      <div class="form-group">
-        <label>Precio Venta *
-          <span id="p-venta-sugerido" style="font-size:0.78rem;color:var(--teal);margin-left:8px;font-weight:600"></span>
-        </label>
-        <input type="number" id="p-venta" min="0"/>
-      </div>
-      <div class="form-group" style="align-self:flex-end;padding-bottom:4px">
-        <button type="button" class="btn-secondary" style="width:100%" onclick="aplicarPrecioSugerido()">↑ Usar sugerido</button>
-      </div>
+    <div id="margen-display" style="display:none;margin:-8px 0 12px;padding:10px 14px;border-radius:8px;font-size:0.88rem;background:var(--surface2,#1a1b1f)">
+      <span style="color:var(--muted)">Margen de ganancia: </span>
+      <strong id="margen-pct" style="color:var(--teal)"></strong>
+      <span style="color:var(--muted);margin-left:12px">Ganancia por unidad: </span>
+      <strong id="margen-cop" style="color:var(--green)"></strong>
     </div>
     <div class="form-row">
       <div class="form-group"><label>Stock Actual</label><input type="number" id="p-stock" min="0"/></div>
@@ -307,18 +446,7 @@
     </div>
     <p id="entrada-prod-nombre" style="color:var(--teal);font-weight:600;margin-bottom:16px"></p>
     <div class="form-group"><label>Cantidad a ingresar</label><input type="number" id="ent-cantidad" min="1"/></div>
-    <div class="form-group"><label>Precio de Compra (opcional, actualiza el registrado)</label><input type="number" id="ent-precio" min="0" oninput="calcEntradaSugerido()"/></div>
-    <div class="form-row" style="align-items:flex-end">
-      <div class="form-group">
-        <label>Margen de Ganancia (%)
-          <span id="ent-venta-sugerido" style="font-size:0.78rem;color:var(--teal);margin-left:6px;font-weight:600"></span>
-        </label>
-        <input type="number" id="ent-margen" min="0" placeholder="ej: 30" oninput="calcEntradaSugerido()"/>
-      </div>
-      <div class="form-group">
-        <button type="button" class="btn-secondary" style="width:100%" onclick="aplicarEntradaSugerido()">↑ Actualizar P. Venta</button>
-      </div>
-    </div>
+    <div class="form-group"><label>Precio de Compra (opcional, actualiza el registrado)</label><input type="number" id="ent-precio" min="0"/></div>
     <div class="form-group"><label>Nota</label><input type="text" id="ent-nota" placeholder="Proveedor, lote…"/></div>
     <div class="panel" style="margin-top:8px">
       <div class="panel-title" style="font-size:0.85rem">Historial de Entradas</div>
@@ -352,6 +480,8 @@
     </div>
   </div>
 </div>
+
+</div><!-- /#app-screen -->
 
 <script src="/js/app.js"></script>
 <script>

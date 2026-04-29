@@ -14,7 +14,7 @@ router.post('/', async (req, res) => {
     const vuelto = efectivo ? efectivo - total : null;
 
     const r = await db.run(
-      `INSERT INTO ventas (subtotal, descuento, total, efectivo, vuelto) VALUES (?, ?, ?, ?, ?)`,
+      `INSERT INTO ventas (fecha, subtotal, descuento, total, efectivo, vuelto) VALUES (datetime('now','-5 hours'), ?, ?, ?, ?, ?)`,
       [subtotal, desc, total, efectivo || null, vuelto]
     );
     const ventaId = r.lastID;
@@ -44,7 +44,7 @@ router.get('/', async (req, res) => {
       sql = base + ` WHERE date(v.fecha) BETWEEN ? AND ? GROUP BY v.id ORDER BY v.fecha DESC`;
       params = [desde, hasta];
     } else {
-      sql = base + ` WHERE date(v.fecha) = date('now','localtime') GROUP BY v.id ORDER BY v.fecha DESC`;
+      sql = base + ` WHERE date(v.fecha) = date('now','-5 hours') GROUP BY v.id ORDER BY v.fecha DESC`;
       params = [];
     }
     const rows = await db.all(sql, params);
@@ -75,7 +75,7 @@ router.get('/cierre/historial', async (req, res) => {
 
 router.post('/cierre/ejecutar', async (req, res) => {
   try {
-    const hoy = new Date().toISOString().split('T')[0];
+    const hoy = new Date(new Date().getTime() - 5*60*60*1000).toISOString().split('T')[0];
     const ventasHoy = await db.all(
       `SELECT v.id, v.total, vi.producto_id, vi.cantidad, vi.precio_unitario, vi.nombre_producto
        FROM ventas v JOIN venta_items vi ON v.id = vi.venta_id WHERE date(v.fecha) = ?`, [hoy]

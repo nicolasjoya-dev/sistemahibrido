@@ -56,7 +56,7 @@ const SCHEMA = `
     stock_minimo INTEGER NOT NULL DEFAULT 5,
     codigo_barras TEXT,
     unidad TEXT NOT NULL DEFAULT 'unidades',
-    creado_en TEXT DEFAULT (datetime('now','localtime'))
+    creado_en TEXT DEFAULT (datetime('now','-5 hours'))
   );
   CREATE TABLE IF NOT EXISTS entradas_inventario (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -64,12 +64,12 @@ const SCHEMA = `
     cantidad REAL NOT NULL,
     precio_compra REAL,
     nota TEXT,
-    fecha TEXT DEFAULT (datetime('now','localtime')),
+    fecha TEXT DEFAULT (datetime('now','-5 hours')),
     FOREIGN KEY (producto_id) REFERENCES productos(id)
   );
   CREATE TABLE IF NOT EXISTS ventas (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    fecha TEXT DEFAULT (datetime('now','localtime')),
+    fecha TEXT DEFAULT (datetime('now','-5 hours')),
     subtotal REAL NOT NULL,
     descuento REAL NOT NULL DEFAULT 0,
     total REAL NOT NULL,
@@ -95,7 +95,7 @@ const SCHEMA = `
     num_transacciones INTEGER NOT NULL,
     ganancia_total REAL NOT NULL,
     detalle TEXT,
-    creado_en TEXT DEFAULT (datetime('now','localtime'))
+    creado_en TEXT DEFAULT (datetime('now','-5 hours'))
   );
   CREATE TABLE IF NOT EXISTS ajustes (
     clave TEXT PRIMARY KEY,

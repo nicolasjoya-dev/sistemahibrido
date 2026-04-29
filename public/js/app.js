@@ -7,6 +7,19 @@ const fmt = n => Math.round(n || 0).toLocaleString('es-CO');
 const fmtCOP = n => '$' + fmt(n);
 const $ = id => document.getElementById(id);
 
+// SQLite ahora guarda fechas en hora Colombia (UTC-5) directamente.
+// NO agregar 'Z' para evitar que JS las interprete como UTC y las convierta.
+function parseDBDate(str) {
+  if (!str) return new Date();
+  // Si ya tiene T o Z, dejar como está
+  if (str.endsWith('Z')) return new Date(str);
+  // Fechas de la BD ya están en hora local Colombia — parsear sin ajuste
+  return new Date(str.replace(' ', 'T'));
+}
+function fmtHora(str)  { return parseDBDate(str).toLocaleTimeString('es-CO', {hour:'2-digit', minute:'2-digit'}); }
+function fmtFecha(str) { return parseDBDate(str).toLocaleDateString('es-CO'); }
+function fmtFechaHora(str) { return fmtFecha(str) + ' · ' + fmtHora(str); }
+
 // ── State ─────────────────────────────────────────────
 let productos = [];
 let carrito = [];
@@ -53,7 +66,6 @@ function switchTab(name, el) {
   // Load tab data
   if (name === 'dashboard') loadDashboard();
   if (name === 'inventario') loadInventario();
-  if (name === 'ventas') setTimeout(() => { const f = $('venta-buscar'); if (f) f.focus(); }, 100);
   if (name === 'calendario') renderCalendario();
   if (name === 'cierre') loadCierreHistorial();
   if (name === 'ajustes') loadAjustes();
@@ -115,7 +127,7 @@ async function loadDashboard() {
     tbody.innerHTML = ventas.map(v => `
       <tr>
         <td>#${v.id}</td>
-        <td>${new Date(v.fecha).toLocaleTimeString('es-CO', {hour:'2-digit',minute:'2-digit'})}</td>
+        <td>${fmtHora(v.fecha)}</td>
         <td style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${v.productos_resumen || '—'}</td>
         <td><strong style="color:var(--teal)">${fmtCOP(v.total)}</strong></td>
         <td><a href="/api/facturas/${v.id}" target="_blank" class="btn-icon">PDF</a></td>
@@ -169,10 +181,10 @@ function openModalProducto(id) {
   $('modal-titulo').textContent = id ? 'Editar Producto' : 'Nuevo Producto';
   $('modal-save-btn').textContent = id ? 'Actualizar' : 'Guardar';
   $('modal-msg').innerHTML = '';
-  ['p-nombre','p-categoria','p-compra','p-venta','p-stock','p-stockmin','p-barras','p-margen'].forEach(f => $(f).value = '');
+  $('margen-display') && ($('margen-display').style.display = 'none');
+  ['p-nombre','p-categoria','p-compra','p-venta','p-stock','p-stockmin','p-barras'].forEach(f => $(f).value = '');
   $('p-stockmin').value = 5;
   $('p-unidad').value = 'unidades';
-  $('p-venta-sugerido').textContent = '';
 
   if (id) {
     const p = productos.find(x => x.id === id);
@@ -185,15 +197,31 @@ function openModalProducto(id) {
       $('p-stockmin').value  = p.stock_minimo;
       $('p-barras').value    = p.codigo_barras || '';
       $('p-unidad').value    = p.unidad;
-      // Prefill margen if compra > 0
-      if (p.precio_compra > 0 && p.precio_venta > 0) {
-        const margen = Math.round(((p.precio_venta - p.precio_compra) / p.precio_compra) * 100);
-        $('p-margen').value = margen;
-        $('p-venta-sugerido').textContent = '';
-      }
+      calcMargen();
     }
   }
   openModal('modal-producto');
+}
+
+function calcMargen() {
+  const compra = parseFloat($('p-compra').value) || 0;
+  const venta  = parseFloat($('p-venta').value)  || 0;
+  const display = $('margen-display');
+  if (venta > 0 && compra > 0) {
+    const ganancia = venta - compra;
+    const pct = ((ganancia / compra) * 100).toFixed(1);
+    $('margen-pct').textContent = pct + '%';
+    $('margen-cop').textContent = fmtCOP(ganancia);
+    $('margen-pct').style.color = ganancia >= 0 ? 'var(--teal)' : 'var(--red, #ff6b6b)';
+    $('margen-cop').style.color  = ganancia >= 0 ? 'var(--green)' : 'var(--red, #ff6b6b)';
+    display.style.display = 'block';
+  } else if (venta > 0) {
+    $('margen-pct').textContent = '—';
+    $('margen-cop').textContent = fmtCOP(venta);
+    display.style.display = 'block';
+  } else {
+    display.style.display = 'none';
+  }
 }
 
 async function guardarProducto() {
@@ -232,49 +260,6 @@ async function eliminarProducto(id) {
   loadInventario();
 }
 
-// ── MARGEN DE GANANCIA ────────────────────────────────
-function calcPrecioSugerido() {
-  const compra = parseFloat($('p-compra').value) || 0;
-  const margen = parseFloat($('p-margen').value) || 0;
-  const el = $('p-venta-sugerido');
-  if (compra > 0 && margen > 0) {
-    const sugerido = Math.ceil(compra * (1 + margen / 100));
-    el.textContent = `→ Sugerido: ${fmtCOP(sugerido)}`;
-    el._sugerido = sugerido;
-  } else {
-    el.textContent = '';
-    el._sugerido = null;
-  }
-}
-
-function aplicarPrecioSugerido() {
-  const sugerido = $('p-venta-sugerido')._sugerido;
-  if (sugerido) $('p-venta').value = sugerido;
-}
-
-function calcEntradaSugerido() {
-  const compra = parseFloat($('ent-precio').value) || 0;
-  const margen = parseFloat($('ent-margen').value) || 0;
-  const el = $('ent-venta-sugerido');
-  if (compra > 0 && margen > 0) {
-    const sugerido = Math.ceil(compra * (1 + margen / 100));
-    el.textContent = `→ Nuevo P. Venta: ${fmtCOP(sugerido)}`;
-    el._sugerido = sugerido;
-  } else {
-    el.textContent = '';
-    el._sugerido = null;
-  }
-}
-
-function aplicarEntradaSugerido() {
-  const sugerido = $('ent-venta-sugerido')._sugerido;
-  if (!sugerido) { alert('Ingresa precio de compra y margen primero'); return; }
-  if (!confirm(`¿Actualizar el precio de venta a ${fmtCOP(sugerido)}?`)) return;
-  // Store in a data attribute to be sent with the entrada
-  $('ent-venta-sugerido')._aplicar = sugerido;
-  alert(`✓ Se actualizará el precio de venta a ${fmtCOP(sugerido)} al guardar.`);
-}
-
 // ── MODAL ENTRADA INVENTARIO ──────────────────────────
 async function openModalEntrada(id) {
   entradaProductoId = id;
@@ -283,10 +268,6 @@ async function openModalEntrada(id) {
   $('ent-cantidad').value = '';
   $('ent-precio').value   = p ? p.precio_compra : '';
   $('ent-nota').value     = '';
-  $('ent-margen').value   = '';
-  $('ent-venta-sugerido').textContent = '';
-  $('ent-venta-sugerido')._sugerido = null;
-  $('ent-venta-sugerido')._aplicar  = null;
 
   // Historial
   const entradas = await api('GET', `/api/productos/${id}/entradas`) || [];
@@ -296,7 +277,7 @@ async function openModalEntrada(id) {
   } else {
     tbody.innerHTML = entradas.slice(0,10).map(e => `
       <tr>
-        <td>${new Date(e.fecha).toLocaleDateString('es-CO')}</td>
+        <td>${fmtFecha(e.fecha)}</td>
         <td>+${e.cantidad}</td>
         <td>${e.precio_compra ? fmtCOP(e.precio_compra) : '—'}</td>
         <td style="color:var(--muted)">${e.nota || '—'}</td>
@@ -313,20 +294,8 @@ async function guardarEntrada() {
     precio_compra: parseFloat($('ent-precio').value) || null,
     nota: $('ent-nota').value.trim() || null
   });
-  // If user chose to apply a new precio_venta from margen
-  const nuevoPrecioVenta = $('ent-venta-sugerido')._aplicar;
-  if (nuevoPrecioVenta) {
-    const p = productos.find(x => x.id === entradaProductoId);
-    if (p) {
-      await api('PUT', `/api/productos/${entradaProductoId}`, {
-        ...p,
-        precio_venta: nuevoPrecioVenta,
-        precio_compra: parseFloat($('ent-precio').value) || p.precio_compra
-      });
-    }
-  }
   closeModal('modal-entrada');
-  showMsg('inv-msg', `Entrada registrada${nuevoPrecioVenta ? ` · Precio venta actualizado a ${fmtCOP(nuevoPrecioVenta)}` : ''}.`, 'ok');
+  showMsg('inv-msg', `Entrada de ${cantidad} unidades registrada.`, 'ok');
   loadInventario();
 }
 
@@ -525,7 +494,7 @@ async function verVentasDia(fecha, dia) {
     tbody.innerHTML = ventas.map(v => `
       <tr>
         <td>#${v.id}</td>
-        <td>${new Date(v.fecha).toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit'})}</td>
+        <td>${fmtHora(v.fecha)}</td>
         <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${v.productos_resumen||'—'}</td>
         <td>${v.descuento > 0 ? fmtCOP(v.descuento) : '—'}</td>
         <td><strong style="color:var(--teal)">${fmtCOP(v.total)}</strong></td>
@@ -567,7 +536,7 @@ async function cargarInformes() {
       <div class="inf-venta-header">
         <div>
           <span class="inf-venta-id">Venta #${v.id}</span>
-          <span class="inf-venta-hora" style="margin-left:12px">${new Date(v.fecha).toLocaleDateString('es-CO')} · ${new Date(v.fecha).toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit'})}</span>
+          <span class="inf-venta-hora" style="margin-left:12px">${fmtFecha(v.fecha)} · ${fmtHora(v.fecha)}</span>
         </div>
         <div style="display:flex;align-items:center;gap:10px">
           <span class="inf-venta-total">${fmtCOP(v.total)}</span>
