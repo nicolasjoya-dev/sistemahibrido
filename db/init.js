@@ -75,6 +75,7 @@ const SCHEMA = `
     total REAL NOT NULL,
     efectivo REAL,
     vuelto REAL,
+    medio_pago TEXT NOT NULL DEFAULT 'efectivo',
     cerrada INTEGER NOT NULL DEFAULT 1
   );
   CREATE TABLE IF NOT EXISTS venta_items (
@@ -111,7 +112,11 @@ _db.serialize(() => {
   _db.run('PRAGMA foreign_keys = ON');
   _db.exec(SCHEMA, (err) => {
     if (err) console.error('Error BD:', err);
-    else console.log('Base de datos lista');
+    else {
+      // Migración: agregar columna medio_pago si no existe (BD existentes)
+      _db.run(`ALTER TABLE ventas ADD COLUMN medio_pago TEXT NOT NULL DEFAULT 'efectivo'`, () => {});
+      console.log('Base de datos lista');
+    }
   });
 });
 

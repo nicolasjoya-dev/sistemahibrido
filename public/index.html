@@ -210,6 +210,7 @@
       <div class="stat-card"><div class="stat-icon green">$</div><div class="stat-data"><span class="stat-val" id="d-total-hoy">—</span><span class="stat-label">Total hoy</span></div></div>
       <div class="stat-card" id="d-alertas-card"><div class="stat-icon amber">!</div><div class="stat-data"><span class="stat-val" id="d-alertas">—</span><span class="stat-label">Alertas stock</span></div></div>
     </div>
+    <div id="dash-msg"></div>
     <div class="panel">
       <div class="panel-title">⚠ Alertas de Stock</div>
       <div id="dash-alertas-list" style="padding:8px 0"></div>
@@ -217,7 +218,7 @@
     <div class="panel">
       <div class="panel-title">Ventas de Hoy</div>
       <table class="data-table" id="dash-ventas-table">
-        <thead><tr><th>#</th><th>Hora</th><th>Productos</th><th>Total</th><th>Acciones</th></tr></thead>
+        <thead><tr><th>#</th><th>Hora</th><th>Productos</th><th>Pago</th><th>Total</th><th>Acciones</th></tr></thead>
         <tbody id="dash-ventas-body"></tbody>
       </table>
     </div>
@@ -280,14 +281,38 @@
           <div style="display:flex;justify-content:space-between;font-family:var(--font-head);font-size:1.2rem;font-weight:800;margin-bottom:14px">
             <span>TOTAL</span><span id="cart-total" style="color:var(--teal)">$0</span>
           </div>
-          <div class="form-group">
-            <label>Efectivo recibido</label>
-            <input type="number" id="cart-efectivo" placeholder="0" oninput="calcVuelto()"/>
+
+          <!-- Medio de pago -->
+          <div class="form-group" style="margin-bottom:12px">
+            <label>Medio de pago</label>
+            <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px">
+              <label style="cursor:pointer">
+                <input type="radio" name="medio_pago" id="mp-efectivo" value="efectivo" checked onchange="actualizarMedioPago()" style="display:none"/>
+                <div class="mp-btn" id="mp-btn-efectivo" style="text-align:center;padding:8px 4px;border-radius:8px;border:2px solid var(--teal);background:rgba(0,201,167,0.1);font-size:0.82rem;font-weight:600;color:var(--teal)">💵 Efectivo</div>
+              </label>
+              <label style="cursor:pointer">
+                <input type="radio" name="medio_pago" id="mp-nequi" value="nequi" onchange="actualizarMedioPago()" style="display:none"/>
+                <div class="mp-btn" id="mp-btn-nequi" style="text-align:center;padding:8px 4px;border-radius:8px;border:2px solid var(--border);font-size:0.82rem;font-weight:600;color:var(--muted)">📱 Nequi</div>
+              </label>
+              <label style="cursor:pointer">
+                <input type="radio" name="medio_pago" id="mp-daviplata" value="daviplata" onchange="actualizarMedioPago()" style="display:none"/>
+                <div class="mp-btn" id="mp-btn-daviplata" style="text-align:center;padding:8px 4px;border-radius:8px;border:2px solid var(--border);font-size:0.82rem;font-weight:600;color:var(--muted)">📲 Daviplata</div>
+              </label>
+            </div>
           </div>
-          <div style="display:flex;justify-content:space-between;margin-bottom:16px;font-size:0.95rem">
-            <span style="color:var(--muted)">Vuelto</span>
-            <span id="cart-vuelto" style="color:var(--green);font-weight:700">—</span>
+
+          <!-- Solo se muestra en efectivo -->
+          <div id="bloque-efectivo">
+            <div class="form-group">
+              <label>Efectivo recibido</label>
+              <input type="number" id="cart-efectivo" placeholder="0" oninput="calcVuelto()"/>
+            </div>
+            <div style="display:flex;justify-content:space-between;margin-bottom:16px;font-size:0.95rem">
+              <span style="color:var(--muted)">Vuelto</span>
+              <span id="cart-vuelto" style="color:var(--green);font-weight:700">—</span>
+            </div>
           </div>
+
           <button class="btn-primary full-width" onclick="confirmarVenta()">Confirmar Venta</button>
           <button class="btn-secondary" style="width:100%;margin-top:8px" onclick="limpiarCarrito()">Limpiar</button>
         </div>

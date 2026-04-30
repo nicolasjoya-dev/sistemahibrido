@@ -2,35 +2,42 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db/init');
 
+// ── POST nueva venta ──────────────────────────────────
 router.post('/', async (req, res) => {
   try {
-    const { items, descuento, efectivo } = req.body;
+    const { items, descuento, efectivo, medio_pago } = req.body;
     if (!items || items.length === 0) return res.status(400).json({ error: 'Carrito vacio' });
 
     let subtotal = 0;
     for (const item of items) subtotal += item.cantidad * item.precio_unitario;
-    const desc  = descuento || 0;
-    const total = subtotal - desc;
-    const vuelto = efectivo ? efectivo - total : null;
+    const desc   = descuento || 0;
+    const total  = subtotal - desc;
+    const mp     = medio_pago || 'efectivo';
+    const ef     = mp === 'efectivo' ? (efectivo || null) : null;
+    const vuelto = (mp === 'efectivo' && ef) ? ef - total : null;
 
     const r = await db.run(
-      `INSERT INTO ventas (fecha, subtotal, descuento, total, efectivo, vuelto) VALUES (datetime('now','-5 hours'), ?, ?, ?, ?, ?)`,
-      [subtotal, desc, total, efectivo || null, vuelto]
+      `INSERT INTO ventas (fecha, subtotal, descuento, total, efectivo, vuelto, medio_pago)
+       VALUES (datetime('now','-5 hours'), ?, ?, ?, ?, ?, ?)`,
+      [subtotal, desc, total, ef, vuelto, mp]
     );
     const ventaId = r.lastID;
 
     for (const item of items) {
       await db.run(
-        `INSERT INTO venta_items (venta_id, producto_id, nombre_producto, cantidad, precio_unitario, subtotal) VALUES (?, ?, ?, ?, ?, ?)`,
-        [ventaId, item.producto_id, item.nombre_producto, item.cantidad, item.precio_unitario, item.cantidad * item.precio_unitario]
+        `INSERT INTO venta_items (venta_id, producto_id, nombre_producto, cantidad, precio_unitario, subtotal)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        [ventaId, item.producto_id, item.nombre_producto, item.cantidad,
+         item.precio_unitario, item.cantidad * item.precio_unitario]
       );
       await db.run('UPDATE productos SET stock = stock - ? WHERE id = ?', [item.cantidad, item.producto_id]);
     }
 
-    res.json({ id: ventaId, total, vuelto, mensaje: 'Venta registrada' });
+    res.json({ id: ventaId, total, vuelto, medio_pago: mp, mensaje: 'Venta registrada' });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ── GET ventas ────────────────────────────────────────
 router.get('/', async (req, res) => {
   try {
     const { fecha, desde, hasta } = req.query;
@@ -52,6 +59,28 @@ router.get('/', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ── DELETE venta + devolver stock ─────────────────────
+router.delete('/:id', async (req, res) => {
+  try {
+    const id = req.params.id;
+    const venta = await db.get('SELECT id FROM ventas WHERE id = ?', [id]);
+    if (!venta) return res.status(404).json({ error: 'Venta no encontrada' });
+
+    // Recuperar items para devolver stock
+    const items = await db.all('SELECT * FROM venta_items WHERE venta_id = ?', [id]);
+    for (const item of items) {
+      await db.run('UPDATE productos SET stock = stock + ? WHERE id = ?', [item.cantidad, item.producto_id]);
+    }
+
+    // Eliminar items y venta
+    await db.run('DELETE FROM venta_items WHERE venta_id = ?', [id]);
+    await db.run('DELETE FROM ventas WHERE id = ?', [id]);
+
+    res.json({ mensaje: 'Venta eliminada y stock devuelto' });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Calendario mes ────────────────────────────────────
 router.get('/calendario/mes', async (req, res) => {
   try {
     const { anio, mes } = req.query;
@@ -66,6 +95,7 @@ router.get('/calendario/mes', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ── Cierre historial ──────────────────────────────────
 router.get('/cierre/historial', async (req, res) => {
   try {
     const rows = await db.all('SELECT * FROM cierres_dia ORDER BY fecha DESC');
@@ -73,18 +103,26 @@ router.get('/cierre/historial', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ── Cierre del día ────────────────────────────────────
 router.post('/cierre/ejecutar', async (req, res) => {
   try {
     const hoy = new Date(new Date().getTime() - 5*60*60*1000).toISOString().split('T')[0];
     const ventasHoy = await db.all(
-      `SELECT v.id, v.total, vi.producto_id, vi.cantidad, vi.precio_unitario, vi.nombre_producto
+      `SELECT v.id, v.total, v.medio_pago, vi.producto_id, vi.cantidad, vi.precio_unitario, vi.nombre_producto
        FROM ventas v JOIN venta_items vi ON v.id = vi.venta_id WHERE date(v.fecha) = ?`, [hoy]
     );
-    if (ventasHoy.length === 0) return res.json({ mensaje: 'Sin ventas hoy', total: 0, transacciones: 0, ganancia: 0, detalle: [] });
+    if (ventasHoy.length === 0) return res.json({ mensaje: 'Sin ventas hoy', total: 0, transacciones: 0, ganancia: 0, detalle: [], porMedioPago: {} });
 
-    const ventasUnicas = await db.all(`SELECT id, total FROM ventas WHERE date(fecha) = ?`, [hoy]);
+    const ventasUnicas = await db.all(`SELECT id, total, medio_pago FROM ventas WHERE date(fecha) = ?`, [hoy]);
     const totalVentas = ventasUnicas.reduce((s, v) => s + v.total, 0);
     const numTx = ventasUnicas.length;
+
+    // Totales por medio de pago
+    const porMedioPago = { efectivo: 0, nequi: 0, daviplata: 0 };
+    for (const v of ventasUnicas) {
+      const mp = v.medio_pago || 'efectivo';
+      porMedioPago[mp] = (porMedioPago[mp] || 0) + v.total;
+    }
 
     const productosMap = {};
     for (const row of ventasHoy) {
@@ -104,15 +142,16 @@ router.post('/cierre/ejecutar', async (req, res) => {
     const existeCierre = await db.get('SELECT id FROM cierres_dia WHERE fecha = ?', [hoy]);
     if (existeCierre) {
       await db.run('UPDATE cierres_dia SET total_ventas=?, num_transacciones=?, ganancia_total=?, detalle=? WHERE fecha=?',
-        [totalVentas, numTx, gananciaTotal, JSON.stringify(detalle), hoy]);
+        [totalVentas, numTx, gananciaTotal, JSON.stringify({ productos: detalle, porMedioPago }), hoy]);
     } else {
       await db.run('INSERT INTO cierres_dia (fecha, total_ventas, num_transacciones, ganancia_total, detalle) VALUES (?,?,?,?,?)',
-        [hoy, totalVentas, numTx, gananciaTotal, JSON.stringify(detalle)]);
+        [hoy, totalVentas, numTx, gananciaTotal, JSON.stringify({ productos: detalle, porMedioPago })]);
     }
-    res.json({ total: totalVentas, transacciones: numTx, ganancia: gananciaTotal, masVendido, detalle });
+    res.json({ total: totalVentas, transacciones: numTx, ganancia: gananciaTotal, masVendido, detalle, porMedioPago });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ── GET venta individual ──────────────────────────────
 router.get('/:id', async (req, res) => {
   try {
     const venta = await db.get('SELECT * FROM ventas WHERE id = ?', [req.params.id]);

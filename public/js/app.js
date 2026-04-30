@@ -8,12 +8,9 @@ const fmtCOP = n => '$' + fmt(n);
 const $ = id => document.getElementById(id);
 
 // SQLite ahora guarda fechas en hora Colombia (UTC-5) directamente.
-// NO agregar 'Z' para evitar que JS las interprete como UTC y las convierta.
 function parseDBDate(str) {
   if (!str) return new Date();
-  // Si ya tiene T o Z, dejar como está
   if (str.endsWith('Z')) return new Date(str);
-  // Fechas de la BD ya están en hora local Colombia — parsear sin ajuste
   return new Date(str.replace(' ', 'T'));
 }
 function fmtHora(str)  { return parseDBDate(str).toLocaleTimeString('es-CO', {hour:'2-digit', minute:'2-digit'}); }
@@ -119,19 +116,38 @@ async function loadDashboard() {
     }).join('');
   }
 
+  const MEDIO_LABEL = { efectivo: '💵 Efectivo', nequi: '📱 Nequi', daviplata: '📲 Daviplata' };
+  const MEDIO_COLOR = { efectivo: 'var(--green)', nequi: '#8b5cf6', daviplata: '#e1306c' };
+
   // Ventas hoy
   const tbody = $('dash-ventas-body');
   if (ventas.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="5" class="empty">Sin ventas hoy</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="6" class="empty">Sin ventas hoy</td></tr>';
   } else {
     tbody.innerHTML = ventas.map(v => `
       <tr>
         <td>#${v.id}</td>
         <td>${fmtHora(v.fecha)}</td>
-        <td style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${v.productos_resumen || '—'}</td>
+        <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${v.productos_resumen || '—'}</td>
+        <td><span style="font-size:0.8rem;color:${MEDIO_COLOR[v.medio_pago||'efectivo']}">${MEDIO_LABEL[v.medio_pago||'efectivo']}</span></td>
         <td><strong style="color:var(--teal)">${fmtCOP(v.total)}</strong></td>
-        <td><a href="/api/facturas/${v.id}" target="_blank" class="btn-icon">PDF</a></td>
+        <td style="display:flex;gap:6px;align-items:center">
+          <a href="/api/facturas/${v.id}" target="_blank" class="btn-icon">PDF</a>
+          <button class="btn-icon del" onclick="eliminarVenta(${v.id})">Anular</button>
+        </td>
       </tr>`).join('');
+  }
+}
+
+// ── ELIMINAR VENTA ────────────────────────────────────
+async function eliminarVenta(id) {
+  if (!confirm(`¿Anular la Venta #${id}? El stock de los productos será devuelto.`)) return;
+  const r = await api('DELETE', `/api/ventas/${id}`);
+  if (r && r.mensaje) {
+    showMsg('dash-msg', `✓ Venta #${id} anulada. Stock devuelto.`, 'ok');
+    loadDashboard();
+  } else {
+    showMsg('dash-msg', 'Error al anular la venta.', 'error');
   }
 }
 
@@ -181,7 +197,6 @@ function openModalProducto(id) {
   $('modal-titulo').textContent = id ? 'Editar Producto' : 'Nuevo Producto';
   $('modal-save-btn').textContent = id ? 'Actualizar' : 'Guardar';
   $('modal-msg').innerHTML = '';
-  $('margen-display') && ($('margen-display').style.display = 'none');
   ['p-nombre','p-categoria','p-compra','p-venta','p-stock','p-stockmin','p-barras'].forEach(f => $(f).value = '');
   $('p-stockmin').value = 5;
   $('p-unidad').value = 'unidades';
@@ -197,31 +212,9 @@ function openModalProducto(id) {
       $('p-stockmin').value  = p.stock_minimo;
       $('p-barras').value    = p.codigo_barras || '';
       $('p-unidad').value    = p.unidad;
-      calcMargen();
     }
   }
   openModal('modal-producto');
-}
-
-function calcMargen() {
-  const compra = parseFloat($('p-compra').value) || 0;
-  const venta  = parseFloat($('p-venta').value)  || 0;
-  const display = $('margen-display');
-  if (venta > 0 && compra > 0) {
-    const ganancia = venta - compra;
-    const pct = ((ganancia / compra) * 100).toFixed(1);
-    $('margen-pct').textContent = pct + '%';
-    $('margen-cop').textContent = fmtCOP(ganancia);
-    $('margen-pct').style.color = ganancia >= 0 ? 'var(--teal)' : 'var(--red, #ff6b6b)';
-    $('margen-cop').style.color  = ganancia >= 0 ? 'var(--green)' : 'var(--red, #ff6b6b)';
-    display.style.display = 'block';
-  } else if (venta > 0) {
-    $('margen-pct').textContent = '—';
-    $('margen-cop').textContent = fmtCOP(venta);
-    display.style.display = 'block';
-  } else {
-    display.style.display = 'none';
-  }
 }
 
 async function guardarProducto() {
@@ -366,16 +359,60 @@ function renderCarrito() {
   if (carrito.length === 0) {
     cont.innerHTML = '<div class="empty" style="padding:24px">Carrito vacío</div>';
   } else {
-    cont.innerHTML = carrito.map((item, i) => `
-      <div class="cart-item">
-        <div class="cart-item-name">${item.nombre_producto}</div>
-        <input class="cart-item-qty" type="number" min="0.01" step="0.01" value="${item.cantidad}"
-          onchange="actualizarCantCarrito(${i}, this.value)"/>
-        <div class="cart-item-sub">${fmtCOP(item.cantidad * item.precio_unitario)}</div>
-        <button class="cart-item-del" onclick="eliminarCarrito(${i})">✕</button>
-      </div>`).join('');
+    cont.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:0.88rem">
+      <thead>
+        <tr style="border-bottom:1px solid var(--border)">
+          <th style="text-align:left;padding:8px 12px;color:var(--muted);font-weight:500">Producto</th>
+          <th style="text-align:center;padding:8px 6px;color:var(--muted);font-weight:500">Cant.</th>
+          <th style="text-align:right;padding:8px 12px;color:var(--muted);font-weight:500">Subtotal</th>
+          <th style="width:28px"></th>
+        </tr>
+      </thead>
+      <tbody>
+        ${carrito.map((item, i) => `
+        <tr style="border-bottom:1px solid var(--border)">
+          <td style="padding:10px 12px">
+            <div style="font-weight:500">${item.nombre_producto}</div>
+            <div style="font-size:0.78rem;color:var(--muted)">${fmtCOP(item.precio_unitario)} / ${item.unidad}</div>
+          </td>
+          <td style="padding:10px 6px;text-align:center">
+            <input type="number" min="0.01" step="0.01" value="${item.cantidad}"
+              style="width:58px;text-align:center;padding:4px 6px;border-radius:6px;border:1px solid var(--border);background:var(--surface2,#1a1b1f);color:var(--text);font-size:0.88rem"
+              onchange="actualizarCantCarrito(${i}, this.value)"/>
+          </td>
+          <td style="padding:10px 12px;text-align:right;font-weight:600;color:var(--teal)">${fmtCOP(item.cantidad * item.precio_unitario)}</td>
+          <td style="padding:10px 6px">
+            <button onclick="eliminarCarrito(${i})" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:1rem;padding:2px 4px" title="Quitar">✕</button>
+          </td>
+        </tr>`).join('')}
+      </tbody>
+    </table>`;
   }
   recalcCarrito();
+  actualizarMedioPago();
+}
+
+function actualizarMedioPago() {
+  const radios = document.querySelectorAll('input[name="medio_pago"]');
+  let mp = 'efectivo';
+  radios.forEach(r => {
+    const btn = document.getElementById('mp-btn-' + r.value);
+    if (!btn) return;
+    if (r.checked) {
+      mp = r.value;
+      const COLORS = { efectivo: 'var(--teal)', nequi: '#8b5cf6', daviplata: '#e1306c' };
+      const c = COLORS[r.value] || 'var(--teal)';
+      btn.style.borderColor = c;
+      btn.style.color = c;
+      btn.style.background = `rgba(${r.value==='efectivo'?'0,201,167':r.value==='nequi'?'139,92,246':'225,48,108'},0.1)`;
+    } else {
+      btn.style.borderColor = 'var(--border)';
+      btn.style.color = 'var(--muted)';
+      btn.style.background = 'transparent';
+    }
+  });
+  const bloqueEfectivo = $('bloque-efectivo');
+  if (bloqueEfectivo) bloqueEfectivo.style.display = mp === 'efectivo' ? 'block' : 'none';
 }
 
 function actualizarCantCarrito(i, val) {
@@ -392,8 +429,9 @@ function eliminarCarrito(i) {
 function limpiarCarrito() {
   carrito = [];
   $('cart-descuento').value = '';
-  $('cart-efectivo').value  = '';
-  $('cart-vuelto').textContent = '—';
+  $('cart-efectivo') && ($('cart-efectivo').value = '');
+  $('cart-vuelto') && ($('cart-vuelto').textContent = '—');
+  if ($('cart-medio-pago')) $('cart-medio-pago').value = 'efectivo';
   renderCarrito();
 }
 
@@ -430,12 +468,14 @@ async function confirmarVenta() {
   const descVal = parseFloat($('cart-descuento').value) || 0;
   const tipo = $('cart-desc-tipo').value;
   const desc = tipo === 'pct' ? (sub * descVal / 100) : descVal;
-  const efectivo = parseFloat($('cart-efectivo').value) || null;
+  const medio_pago = (document.querySelector('input[name="medio_pago"]:checked') || {}).value || 'efectivo';
+  const efectivo = (medio_pago === 'efectivo' && $('cart-efectivo')) ? parseFloat($('cart-efectivo').value) || null : null;
 
   const result = await api('POST', '/api/ventas', {
     items: carrito.map(c => ({ ...c })),
     descuento: desc,
-    efectivo
+    efectivo,
+    medio_pago
   });
 
   if (!result || !result.id) { showMsg('venta-msg', 'Error al registrar la venta.', 'error'); return; }
@@ -531,21 +571,33 @@ async function cargarInformes() {
     return;
   }
 
+  const MEDIO_LABEL = { efectivo: '💵 Efectivo', nequi: '📱 Nequi', daviplata: '📲 Daviplata' };
+  const MEDIO_COLOR = { efectivo: 'var(--green)', nequi: '#8b5cf6', daviplata: '#e1306c' };
+
   cont.innerHTML = ventas.map(v => `
     <div class="inf-venta-card">
       <div class="inf-venta-header">
-        <div>
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
           <span class="inf-venta-id">Venta #${v.id}</span>
-          <span class="inf-venta-hora" style="margin-left:12px">${fmtFecha(v.fecha)} · ${fmtHora(v.fecha)}</span>
+          <span class="inf-venta-hora">${fmtFecha(v.fecha)} · ${fmtHora(v.fecha)}</span>
+          <span style="font-size:0.8rem;font-weight:600;color:${MEDIO_COLOR[v.medio_pago||'efectivo']}">${MEDIO_LABEL[v.medio_pago||'efectivo']}</span>
         </div>
         <div style="display:flex;align-items:center;gap:10px">
           <span class="inf-venta-total">${fmtCOP(v.total)}</span>
           <a href="/api/facturas/${v.id}" target="_blank" class="btn-icon">PDF</a>
+          <button class="btn-icon del" onclick="eliminarVentaInforme(${v.id})">Anular</button>
         </div>
       </div>
       <div class="inf-venta-items">${v.productos_resumen || '—'}</div>
       ${v.descuento > 0 ? `<div class="inf-venta-desc">Descuento aplicado: ${fmtCOP(v.descuento)}</div>` : ''}
     </div>`).join('');
+}
+
+async function eliminarVentaInforme(id) {
+  if (!confirm(`¿Anular la Venta #${id}? El stock de los productos será devuelto.`)) return;
+  const r = await api('DELETE', `/api/ventas/${id}`);
+  if (r && r.mensaje) cargarInformes();
+  else alert('Error al anular la venta.');
 }
 
 // ── CIERRE DEL DÍA ────────────────────────────────────
@@ -554,6 +606,15 @@ async function ejecutarCierre() {
   if (!r) return;
 
   $('cierre-resultado').style.display = 'block';
+
+  const pmp = r.porMedioPago || {};
+  const mpHtml = Object.entries({ efectivo:'💵 Efectivo', nequi:'📱 Nequi', daviplata:'📲 Daviplata' })
+    .filter(([k]) => pmp[k] > 0)
+    .map(([k, label]) => `<div style="display:flex;justify-content:space-between;font-size:0.88rem;margin-bottom:4px">
+      <span style="color:var(--muted)">${label}</span>
+      <strong>${fmtCOP(pmp[k])}</strong>
+    </div>`).join('');
+
   $('cierre-stats').innerHTML = `
     <div class="stat-card"><div class="stat-icon green">$</div><div class="stat-data"><span class="stat-val">${fmtCOP(r.total)}</span><span class="stat-label">Total ventas</span></div></div>
     <div class="stat-card"><div class="stat-icon blue">◎</div><div class="stat-data"><span class="stat-val">${r.transacciones}</span><span class="stat-label">Transacciones</span></div></div>
@@ -561,11 +622,20 @@ async function ejecutarCierre() {
     <div class="stat-card"><div class="stat-icon amber">★</div><div class="stat-data"><span class="stat-val" style="font-size:1rem">${r.masVendido||'—'}</span><span class="stat-label">Más vendido</span></div></div>
   `;
 
+  if (mpHtml) {
+    $('cierre-stats').insertAdjacentHTML('afterend', `
+      <div class="panel" style="margin-bottom:20px">
+        <div class="panel-title">💳 Desglose por Medio de Pago</div>
+        <div style="padding:16px 20px">${mpHtml}</div>
+      </div>`);
+  }
+
   const tbody = $('cierre-detalle-body');
-  if (!r.detalle || r.detalle.length === 0) {
+  const detalle = Array.isArray(r.detalle) ? r.detalle : (r.detalle?.productos || []);
+  if (!detalle || detalle.length === 0) {
     tbody.innerHTML = '<tr><td colspan="3" class="empty">Sin datos</td></tr>';
   } else {
-    tbody.innerHTML = r.detalle.map(d => `
+    tbody.innerHTML = detalle.map(d => `
       <tr>
         <td>${d.nombre}</td>
         <td>${d.vendido}</td>
