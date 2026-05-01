@@ -32,6 +32,12 @@ function fechaLocal(d = new Date()) {
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 }
 
+// Icono/label para medio de pago
+function labelMedioPago(mp) {
+  const map = { efectivo: '💵 Efectivo', nequi: '🟣 Nequi', daviplata: '🔴 Daviplata' };
+  return map[mp] || mp || 'Efectivo';
+}
+
 // ── State ─────────────────────────────────────────────
 let productos = [];
 let carrito   = [];
@@ -110,7 +116,6 @@ async function getVentasPorFecha(fechaStr) {
 }
 
 async function getVentasRango(desde, hasta) {
-  // Comparamos fecha_key (string YYYY-MM-DD) directamente
   const snap = await getDocs(
     query(collection(db(), 'ventas'),
       where('fecha_key', '>=', desde),
@@ -128,7 +133,10 @@ async function loadDashboard() {
   const hoy = new Date();
   $('fecha-hoy').textContent = hoy.toLocaleDateString('es-CO', { weekday:'long', year:'numeric', month:'long', day:'numeric' });
 
-  const [prods, ventas] = await Promise.all([getProductos(), getVentasHoy()]);
+  const [prods, todasVentas] = await Promise.all([getProductos(), getVentasHoy()]);
+
+  // Excluir ventas anuladas para totales
+  const ventas  = todasVentas.filter(v => !v.anulada);
   const alertas = prods.filter(p => p.stock <= p.stock_minimo);
 
   productos = prods;  // actualizar cache global
@@ -160,21 +168,68 @@ async function loadDashboard() {
     }).join('');
   }
 
-  // Ventas hoy
+  // Ventas hoy — mostrar todas (incluidas anuladas) con indicador visual
   const tbody = $('dash-ventas-body');
-  if (ventas.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="5" class="empty">Sin ventas hoy</td></tr>';
+  if (todasVentas.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="6" class="empty">Sin ventas hoy</td></tr>';
   } else {
-    tbody.innerHTML = ventas.map((v, i) => `
-      <tr>
+    tbody.innerHTML = todasVentas.map((v, i) => {
+      const anulada    = v.anulada === true;
+      const rowStyle   = anulada ? 'opacity:0.45;text-decoration:line-through' : '';
+      const badgePago  = `<span class="badge" style="text-transform:capitalize;font-size:11px">${labelMedioPago(v.medio_pago)}</span>`;
+      const btnAnular  = anulada
+        ? `<span style="color:var(--red,#ff6b6b);font-size:11px;font-weight:600">ANULADA</span>`
+        : `<button class="btn-icon del" onclick="anularVenta('${v.id}')">Anular</button>`;
+      return `<tr style="${rowStyle}">
         <td>#${i + 1}</td>
         <td>${fmtHora(v.fecha)}</td>
         <td style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${v.productos_resumen || '—'}</td>
+        <td>${badgePago}</td>
         <td><strong style="color:var(--teal)">${fmtCOP(v.total)}</strong></td>
-        <td><button class="btn-icon" onclick="imprimirFactura('${v.id}')">PDF</button></td>
-      </tr>`).join('');
+        <td style="display:flex;gap:6px;align-items:center">
+          <button class="btn-icon" onclick="imprimirFactura('${v.id}')">PDF</button>
+          ${btnAnular}
+        </td>
+      </tr>`;
+    }).join('');
   }
 }
+
+/* ═══════════════════════════════════════════════════════
+   ANULAR VENTA  (devuelve stock)
+═══════════════════════════════════════════════════════ */
+
+window.anularVenta = async function(ventaId) {
+  if (!confirm('¿Anular esta venta? El stock de los productos será devuelto.')) return;
+
+  const ventaSnap = await getDoc(doc(db(), 'ventas', ventaId));
+  if (!ventaSnap.exists()) { alert('Venta no encontrada'); return; }
+  const v = ventaSnap.data();
+
+  if (v.anulada) { alert('Esta venta ya fue anulada.'); return; }
+
+  // 1. Devolver stock de cada ítem
+  for (const item of (v.items || [])) {
+    const prodRef  = doc(db(), 'productos', item.producto_id);
+    const prodSnap = await getDoc(prodRef);
+    if (prodSnap.exists()) {
+      const stockActual = prodSnap.data().stock || 0;
+      await updateDoc(prodRef, { stock: stockActual + item.cantidad });
+    }
+  }
+
+  // 2. Marcar venta como anulada (conservar para historial)
+  await updateDoc(doc(db(), 'ventas', ventaId), {
+    anulada:         true,
+    fecha_anulacion: serverTimestamp()
+  });
+
+  showMsg('dash-msg', '✓ Venta anulada y stock devuelto correctamente.', 'warn');
+
+  // Refrescar cache de productos y dashboard
+  productos = await getProductos();
+  loadDashboard();
+};
 
 /* ═══════════════════════════════════════════════════════
    INVENTARIO
@@ -381,7 +436,6 @@ window.buscarProductoVenta = function() {
   const cont = $('venta-sugerencias');
   if (q.length < 1) { cont.innerHTML = ''; return; }
 
-  // Búsqueda local sobre cache de productos
   const filtrados = productos
     .filter(p => p.nombre.toLowerCase().includes(q.toLowerCase()) ||
                  (p.codigo_barras || '').includes(q))
@@ -494,6 +548,7 @@ window.calcVuelto = function() {
     $('cart-vuelto').textContent = '—';
   }
 };
+
 // ── MEDIO DE PAGO ─────────────────────────────────────
 window.actualizarMedioPago = function() {
   const val = document.querySelector('input[name="medio_pago"]:checked')?.value || 'efectivo';
@@ -540,6 +595,7 @@ window.confirmarVenta = async function() {
     medio_pago,
     efectivo:          efectivo || 0,
     vuelto:            efectivo ? efectivo - total : 0,
+    anulada:           false,
     fecha:             serverTimestamp(),
     fecha_key:         fechaLocal(ahora)
   });
@@ -561,13 +617,11 @@ window.confirmarVenta = async function() {
   }
 
   limpiarCarrito();
-  // Actualizar cache de productos
   productos = await getProductos();
 };
 
 /* ═══════════════════════════════════════════════════════
    FACTURA  (generación en navegador con window.print)
-   — Sin servidor. Si quieres PDF real instala jsPDF.
 ═══════════════════════════════════════════════════════ */
 
 window.imprimirFactura = async function(ventaId) {
@@ -575,7 +629,6 @@ window.imprimirFactura = async function(ventaId) {
   if (!ventaSnap.exists()) { alert('Venta no encontrada'); return; }
   const v = ventaSnap.data();
 
-  // Ajustes del negocio
   const ajSnap = await getDoc(doc(db(), 'ajustes', 'negocio'));
   const aj     = ajSnap.exists() ? ajSnap.data() : {};
 
@@ -592,13 +645,16 @@ window.imprimirFactura = async function(ventaId) {
       td   { padding: 3px 0; }
       .right { text-align: right; }
       .total { font-size: 16px; font-weight: bold; }
+      .anulada { color: red; text-align: center; font-weight: bold; font-size: 15px; }
     </style>
   </head><body>
     <h2>${aj.nombre_negocio || 'Miscelánea'}</h2>
     <p>${aj.direccion || ''}</p>
     <p>${aj.telefono  || ''}</p>
     <hr/>
+    ${v.anulada ? '<p class="anulada">⚠ VENTA ANULADA</p><hr/>' : ''}
     <p>Fecha: ${fmtFechaHora(v.fecha)}</p>
+    <p>Pago: ${labelMedioPago(v.medio_pago)}</p>
     <hr/>
     <table>
       <tr><td><strong>Producto</strong></td><td class="right"><strong>Cant.</strong></td><td class="right"><strong>Precio</strong></td><td class="right"><strong>Subtotal</strong></td></tr>
@@ -628,12 +684,13 @@ window.renderCalendario = async function() {
   const meses = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
   $('cal-label').textContent = `${meses[calMes-1]} ${calAnio}`;
 
-  // Traer ventas del mes completo
   const desde = `${calAnio}-${String(calMes).padStart(2,'0')}-01`;
   const hasta = `${calAnio}-${String(calMes).padStart(2,'0')}-31`;
-  const ventas = await getVentasRango(desde, hasta);
+  const todasVentas = await getVentasRango(desde, hasta);
 
-  // Agrupar por día
+  // Solo ventas NO anuladas para totales del calendario
+  const ventas = todasVentas.filter(v => !v.anulada);
+
   const ventasPorDia = {};
   ventas.forEach(v => {
     const key = v.fecha_key;
@@ -666,21 +723,31 @@ window.renderCalendario = async function() {
 };
 
 window.verVentasDia = async function(fecha, dia) {
-  const ventas = await getVentasPorFecha(fecha);
+  const todasVentas = await getVentasPorFecha(fecha);
   $('cal-detalle-titulo').textContent = `Ventas del ${dia}`;
   const tbody = $('cal-detalle-body');
-  if (ventas.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="6" class="empty">Sin ventas este día</td></tr>';
+  if (todasVentas.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="7" class="empty">Sin ventas este día</td></tr>';
   } else {
-    tbody.innerHTML = ventas.map((v, i) => `
-      <tr>
+    tbody.innerHTML = todasVentas.map((v, i) => {
+      const anulada  = v.anulada === true;
+      const rowStyle = anulada ? 'opacity:0.45;text-decoration:line-through' : '';
+      const btnAnular = anulada
+        ? `<span style="color:var(--red,#ff6b6b);font-size:11px;font-weight:600">ANULADA</span>`
+        : `<button class="btn-icon del" onclick="anularVenta('${v.id}')">Anular</button>`;
+      return `<tr style="${rowStyle}">
         <td>#${i + 1}</td>
         <td>${fmtHora(v.fecha)}</td>
         <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${v.productos_resumen || '—'}</td>
+        <td><span class="badge" style="font-size:11px">${labelMedioPago(v.medio_pago)}</span></td>
         <td>${v.descuento > 0 ? fmtCOP(v.descuento) : '—'}</td>
         <td><strong style="color:var(--teal)">${fmtCOP(v.total)}</strong></td>
-        <td><button class="btn-icon" onclick="imprimirFactura('${v.id}')">PDF</button></td>
-      </tr>`).join('');
+        <td style="display:flex;gap:6px;align-items:center">
+          <button class="btn-icon" onclick="imprimirFactura('${v.id}')">PDF</button>
+          ${btnAnular}
+        </td>
+      </tr>`;
+    }).join('');
   }
   $('cal-detalle').style.display = 'block';
   $('cal-detalle').scrollIntoView({ behavior: 'smooth' });
@@ -702,7 +769,10 @@ window.cargarInformes = async function() {
   const hasta = $('inf-hasta').value;
   if (!desde || !hasta) { alert('Selecciona un rango de fechas'); return; }
 
-  const ventas = await getVentasRango(desde, hasta);
+  const todasVentas = await getVentasRango(desde, hasta);
+
+  // Solo ventas no anuladas para los totales
+  const ventas = todasVentas.filter(v => !v.anulada);
   const total  = ventas.reduce((s, v) => s + (v.total || 0), 0);
 
   $('inf-num').textContent   = ventas.length;
@@ -710,25 +780,39 @@ window.cargarInformes = async function() {
   $('inf-resumen').style.display = 'grid';
 
   const cont = $('inf-lista');
-  if (ventas.length === 0) {
+  if (todasVentas.length === 0) {
     cont.innerHTML = '<div class="empty">Sin ventas en el período seleccionado</div>';
     return;
   }
-  cont.innerHTML = ventas.map(v => `
-    <div class="inf-venta-card">
+
+  cont.innerHTML = todasVentas.map(v => {
+    const anulada   = v.anulada === true;
+    const cardStyle = anulada ? 'opacity:0.5' : '';
+    const badgeAnulada = anulada
+      ? `<span style="color:var(--red,#ff6b6b);font-size:11px;font-weight:700;margin-left:8px">ANULADA</span>`
+      : '';
+    const btnAnular = anulada
+      ? ''
+      : `<button class="btn-icon del" onclick="anularVenta('${v.id}')">Anular</button>`;
+    return `
+    <div class="inf-venta-card" style="${cardStyle}">
       <div class="inf-venta-header">
         <div>
           <span class="inf-venta-id">Venta</span>
           <span class="inf-venta-hora" style="margin-left:12px">${fmtFechaHora(v.fecha)}</span>
+          ${badgeAnulada}
         </div>
         <div style="display:flex;align-items:center;gap:10px">
-          <span class="inf-venta-total">${fmtCOP(v.total)}</span>
+          <span class="badge" style="font-size:11px">${labelMedioPago(v.medio_pago)}</span>
+          <span class="inf-venta-total" style="${anulada ? 'text-decoration:line-through' : ''}">${fmtCOP(v.total)}</span>
           <button class="btn-icon" onclick="imprimirFactura('${v.id}')">PDF</button>
+          ${btnAnular}
         </div>
       </div>
       <div class="inf-venta-items">${v.productos_resumen || '—'}</div>
       ${v.descuento > 0 ? `<div class="inf-venta-desc">Descuento aplicado: ${fmtCOP(v.descuento)}</div>` : ''}
-    </div>`).join('');
+    </div>`;
+  }).join('');
 };
 
 /* ═══════════════════════════════════════════════════════
@@ -736,13 +820,16 @@ window.cargarInformes = async function() {
 ═══════════════════════════════════════════════════════ */
 
 window.ejecutarCierre = async function() {
-  const ventas = await getVentasHoy();
-  if (ventas.length === 0) { alert('No hay ventas registradas hoy.'); return; }
+  const todasVentas = await getVentasHoy();
+
+  // Solo ventas no anuladas para el cierre
+  const ventas = todasVentas.filter(v => !v.anulada);
+
+  if (ventas.length === 0) { alert('No hay ventas válidas registradas hoy.'); return; }
 
   const total         = ventas.reduce((s, v) => s + (v.total || 0), 0);
   const transacciones = ventas.length;
 
-  // Calcular ganancia y desglose por producto
   const desglose = {};
   ventas.forEach(v => {
     (v.items || []).forEach(item => {
@@ -753,13 +840,12 @@ window.ejecutarCierre = async function() {
     });
   });
 
-  const detalle   = Object.entries(desglose).map(([nombre, d]) => ({ nombre, ...d }));
-  const ganancia  = detalle.reduce((s, d) => s + d.ganancia, 0);
+  const detalle    = Object.entries(desglose).map(([nombre, d]) => ({ nombre, ...d }));
+  const ganancia   = detalle.reduce((s, d) => s + d.ganancia, 0);
   const masVendido = detalle.sort((a, b) => b.vendido - a.vendido)[0]?.nombre || '—';
 
   const hoy = fechaLocal();
 
-  // Guardar cierre en Firestore
   await setDoc(doc(db(), 'cierres', hoy), {
     fecha:             hoy,
     total_ventas:      total,
@@ -769,7 +855,6 @@ window.ejecutarCierre = async function() {
     creado:            serverTimestamp()
   });
 
-  // Mostrar resultado
   $('cierre-resultado').style.display = 'block';
   $('cierre-stats').innerHTML = `
     <div class="stat-card"><div class="stat-icon green">$</div><div class="stat-data"><span class="stat-val">${fmtCOP(total)}</span><span class="stat-label">Total ventas</span></div></div>
@@ -854,7 +939,6 @@ window.initApp = async function() {
   $('inf-desde').value = hoy;
   $('inf-hasta').value = hoy;
 
-  // Precargar productos en cache global
   productos = await getProductos();
 
   loadDashboard();
