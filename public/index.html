@@ -13,13 +13,12 @@
 
 <!-- Firebase SDK -->
 <script type="module">
-  import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
+  import { initializeApp }   from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
+  import { getAnalytics }    from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-analytics.js';
   import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged }
     from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
+  import { getFirestore }    from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
 
-  // ── 🔧 CONFIGURA AQUÍ TU PROYECTO FIREBASE ──────────────
-  // Ve a https://console.firebase.google.com → Tu proyecto →
-  // Configuración del proyecto → Tus apps → Web → SDK
   const firebaseConfig = {
     apiKey:            "AIzaSyD5xOfspIncKCirWCMiFeGGYsbXvF8iXDk",
     authDomain:        "hibrido-d3221.firebaseapp.com",
@@ -35,10 +34,16 @@
     "nico.joya2010@gmail.com"
   ];
 
-  const app  = initializeApp(firebaseConfig);
-  const auth = getAuth(app);
-  const provider = new GoogleAuthProvider();
+  const firebaseApp = initializeApp(firebaseConfig);
+  const analytics   = getAnalytics(firebaseApp);
+  const auth        = getAuth(firebaseApp);
+  const db          = getFirestore(firebaseApp);
+  const provider    = new GoogleAuthProvider();
   provider.setCustomParameters({ prompt: 'select_account' });
+
+  // Exponer globalmente para que app.js los use
+  window.__db   = db;
+  window.__auth = auth;
 
   // Login
   window.loginGoogle = async () => {
@@ -47,8 +52,8 @@
     btn.disabled = true;
     try {
       const result = await signInWithPopup(auth, provider);
-      const email = result.user.email;
-      if (EMAILS_AUTORIZADOS.length > 0 && !EMAILS_AUTORIZADOS.includes(email)) {
+      const email  = result.user.email;
+      if (!EMAILS_AUTORIZADOS.includes(email)) {
         await signOut(auth);
         document.getElementById('login-error').textContent =
           `⚠ ${email} no está autorizado para acceder a este sistema.`;
@@ -62,10 +67,8 @@
     }
   };
 
-  // Logout
   window.cerrarSesion = () => signOut(auth);
 
-  // Observador de estado
   onAuthStateChanged(auth, (user) => {
     const loginScreen = document.getElementById('login-screen');
     const appScreen   = document.getElementById('app-screen');
@@ -83,6 +86,8 @@
           <button onclick="cerrarSesion()" style="background:none;border:1px solid var(--border);border-radius:6px;padding:3px 8px;color:var(--muted);font-size:0.75rem;cursor:pointer">Salir</button>
         `;
       }
+      // Iniciar la app una vez autenticado
+      if (typeof window.initApp === 'function') window.initApp();
     } else {
       loginScreen.style.display = 'flex';
       appScreen.style.display   = 'none';
