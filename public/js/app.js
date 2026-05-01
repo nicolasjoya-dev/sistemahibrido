@@ -494,6 +494,27 @@ window.calcVuelto = function() {
     $('cart-vuelto').textContent = '—';
   }
 };
+// ── MEDIO DE PAGO ─────────────────────────────────────
+window.actualizarMedioPago = function() {
+  const val = document.querySelector('input[name="medio_pago"]:checked')?.value || 'efectivo';
+  ['efectivo','nequi','daviplata'].forEach(mp => {
+    const btn = document.getElementById('mp-btn-' + mp);
+    if (!btn) return;
+    if (mp === val) {
+      btn.style.border     = '2px solid var(--teal)';
+      btn.style.background = 'rgba(0,201,167,0.1)';
+      btn.style.color      = 'var(--teal)';
+    } else {
+      btn.style.border     = '2px solid var(--border)';
+      btn.style.background = 'transparent';
+      btn.style.color      = 'var(--muted)';
+    }
+  });
+  const bloqueEfectivo = document.getElementById('bloque-efectivo');
+  if (bloqueEfectivo) {
+    bloqueEfectivo.style.display = val === 'efectivo' ? 'block' : 'none';
+  }
+};
 
 window.confirmarVenta = async function() {
   if (carrito.length === 0) { alert('El carrito está vacío'); return; }
@@ -504,6 +525,7 @@ window.confirmarVenta = async function() {
   const desc    = tipo === 'pct' ? (sub * descVal / 100) : descVal;
   const total   = Math.max(0, sub - desc);
   const efectivo = parseFloat($('cart-efectivo').value) || null;
+  const medio_pago = document.querySelector('input[name="medio_pago"]:checked')?.value || 'efectivo';
   const ahora   = new Date();
 
   const resumen = carrito.map(c => `${c.nombre_producto} x${c.cantidad}`).join(', ');
@@ -515,10 +537,11 @@ window.confirmarVenta = async function() {
     subtotal:          sub,
     descuento:         desc,
     total,
+    medio_pago,
     efectivo:          efectivo || 0,
     vuelto:            efectivo ? efectivo - total : 0,
     fecha:             serverTimestamp(),
-    fecha_key:         fechaLocal(ahora)   // para queries por día
+    fecha_key:         fechaLocal(ahora)
   });
 
   // 2. Descontar stock de cada producto
