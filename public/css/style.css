@@ -458,3 +458,7 @@ input:focus, select:focus {
   .stats-grid { grid-template-columns: 1fr 1fr; }
   #tab-ventas > div[style*="grid"] { display: block; }
 }
+/* Fix: sugerencias de venta no se corten */
+#tab-ventas .panel {
+  overflow: visible;
+}
