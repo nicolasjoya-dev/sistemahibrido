@@ -1060,6 +1060,10 @@ window.guardarTodosIA = async function() {
   btn.disabled    = false;
   btn.textContent = '💾 Guardar todos';
 };
+window.abrirModalIA = function() {
+  resetModalIA();
+  openModal('modal-ia');
+};
 window.initApp = async function() {
   const hoy = new Date().toISOString().split('T')[0];
   $('inf-desde').value = hoy;
