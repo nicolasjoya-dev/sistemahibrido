@@ -234,6 +234,7 @@
     <div class="page-header">
       <div><h1>Inventario</h1><p class="page-sub">Gestión de productos y stock</p></div>
       <button class="btn-primary" onclick="openModalProducto()">+ Nuevo Producto</button>
+      <button class="btn-secondary" onclick="abrirModalIA()">📷 Importar factura IA</button>
     </div>
     <div id="inv-msg"></div>
     <div class="search-bar"><input type="text" id="inv-search" placeholder="Buscar producto…" oninput="filtrarInventario()"/></div>
@@ -508,6 +509,59 @@
       <button class="btn-secondary" onclick="closeModal('modal-cantidad')">Cancelar</button>
       <button class="btn-primary" onclick="confirmarAgregarCarrito()">Agregar</button>
     </div>
+  </div>
+</div>
+<!-- ═══════════ MODAL IA FACTURA ═══════════ -->
+<div class="modal-overlay" id="modal-ia">
+  <div class="modal" style="max-width:900px;width:96vw">
+
+    <div class="modal-header">
+      <h2>📷 Importar desde factura</h2>
+      <button class="modal-close" onclick="closeModal('modal-ia')">✕</button>
+    </div>
+
+    <!-- ZONA SUBIR FOTO -->
+    <div id="ia-zona-upload">
+      <input type="file" id="ia-file" accept="image/*" capture="environment" hidden/>
+      <div id="ia-dropzone" onclick="document.getElementById('ia-file').click()" style="
+        border:2px dashed var(--border);border-radius:12px;
+        padding:48px 24px;text-align:center;cursor:pointer;transition:.2s
+      ">
+        <div style="font-size:3rem;margin-bottom:12px">📄</div>
+        <p style="font-weight:700;margin-bottom:6px">Toca para subir la foto de la factura</p>
+        <p style="color:var(--muted);font-size:0.85rem">JPG · PNG · Máx 10MB</p>
+      </div>
+      <p id="ia-estado" style="text-align:center;margin-top:14px;font-size:0.9rem;color:var(--muted)"></p>
+    </div>
+
+    <!-- TABLA EDITABLE -->
+    <div id="ia-zona-resultado" style="display:none">
+      <p id="ia-resumen" style="color:var(--teal);font-weight:600;margin-bottom:14px"></p>
+      <div style="overflow-x:auto;margin-bottom:16px">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Nombre</th>
+              <th style="width:110px">Código</th>
+              <th style="width:100px">P.Compra</th>
+              <th style="width:100px">P.Venta</th>
+              <th style="width:80px">Stock</th>
+              <th style="width:80px">Mín.</th>
+              <th style="width:40px"></th>
+            </tr>
+          </thead>
+          <tbody id="ia-tbody"></tbody>
+        </table>
+      </div>
+      <div style="display:flex;justify-content:flex-end;gap:12px">
+        <button class="btn-secondary" onclick="resetModalIA()">← Nueva foto</button>
+        <button class="btn-primary"   onclick="guardarTodosIA()" id="ia-btn-guardar">
+          💾 Guardar todos
+        </button>
+      </div>
+      <div id="ia-msg" style="margin-top:12px"></div>
+    </div>
+
   </div>
 </div>
 
