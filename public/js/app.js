@@ -314,8 +314,9 @@ window.calcMargen = function() {
   const venta  = parseFloat($('p-venta').value)  || 0;
   const display = $('margen-display');
   if (venta > 0 && compra > 0) {
-    const ganancia = venta - compra;
-    const pct = ((ganancia / compra) * 100).toFixed(1);
+    const costoUnit = compra / (parseFloat($('p-stock').value) || 1);
+    const ganancia  = venta - costoUnit;
+    const pct       = ((ganancia / costoUnit) * 100).toFixed(1);
     $('margen-pct').textContent = pct + '%';
     $('margen-cop').textContent = fmtCOP(ganancia);
     $('margen-pct').style.color = ganancia >= 0 ? 'var(--teal)' : 'var(--red,#ff6b6b)';
