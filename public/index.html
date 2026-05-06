@@ -178,6 +178,10 @@
     </a>
     <a class="nav-item" data-tab="inventario" onclick="switchTab('inventario',this)">
       <span class="nav-icon">▦</span><span>Inventario</span>
+
+    </a>
+    <a class="nav-item" data-tab="anchetas" onclick="switchTab('anchetas',this)">
+      <span class="nav-icon">🎁</span><span>Anchetas</span>
     </a>
     <a class="nav-item" data-tab="ventas" onclick="switchTab('ventas',this)">
       <span class="nav-icon">◎</span><span>Nueva Venta</span>
@@ -241,6 +245,19 @@
       <table class="data-table" id="inv-table">
         <thead><tr><th>Nombre</th><th>Categoría</th><th>P. Compra</th><th>P. Venta</th><th>Stock</th><th>Mín.</th><th>Unidad</th><th>Estado</th><th>Acciones</th></tr></thead>
         <tbody id="inv-body"></tbody>
+      </table>
+    </div>
+  </div>
+   <div id="tab-anchetas" class="tab">
+    <div class="page-header">
+      <div><h1>Anchetas</h1><p class="page-sub">Combos de productos</p></div>
+      <button class="btn-primary" onclick="openModalAncheta()">+ Nueva Ancheta</button>
+    </div>
+    <div id="anch-list-msg"></div>
+    <div class="panel">
+      <table class="data-table">
+        <thead><tr><th>Nombre</th><th>Contenido</th><th>Precio</th><th>Acciones</th></tr></thead>
+        <tbody id="anch-body"></tbody>
       </table>
     </div>
   </div>
@@ -561,6 +578,29 @@
       <div id="ia-msg" style="margin-top:12px"></div>
     </div>
 
+  </div>
+</div>
+<div class="modal-overlay" id="modal-ancheta">
+  <div class="modal" style="max-width:580px">
+    <div class="modal-header">
+      <h2 id="anch-modal-titulo">Nueva Ancheta</h2>
+      <button class="modal-close" onclick="closeModal('modal-ancheta')">✕</button>
+    </div>
+    <div id="anch-msg"></div>
+    <div class="form-row">
+      <div class="form-group"><label>Nombre *</label><input type="text" id="anch-nombre"/></div>
+      <div class="form-group"><label>Precio de Venta *</label><input type="number" id="anch-precio" min="0"/></div>
+    </div>
+    <div class="form-group">
+      <label>Agregar producto</label>
+      <input type="text" id="anch-buscar" placeholder="Buscar producto…" oninput="buscarProductoAncheta()" autocomplete="off"/>
+      <div id="anch-sugerencias" style="position:relative"></div>
+    </div>
+    <div style="margin-top:8px" id="anch-items-lista"></div>
+    <div class="modal-actions">
+      <button class="btn-secondary" onclick="closeModal('modal-ancheta')">Cancelar</button>
+      <button class="btn-primary" onclick="guardarAncheta()">Guardar</button>
+    </div>
   </div>
 </div>
 

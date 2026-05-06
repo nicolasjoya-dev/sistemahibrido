@@ -68,6 +68,8 @@ window.switchTab = function(name, el) {
   if (name === 'calendario') renderCalendario();
   if (name === 'cierre')     loadCierreHistorial();
   if (name === 'ajustes')    loadAjustes();
+  if (name === 'ajustes')    loadAjustes();
+  if (name === 'anchetas')   loadAnchetas();  // ← aquí
 };
 
 // ── Messages ──────────────────────────────────────────
@@ -431,29 +433,51 @@ window.guardarEntrada = async function() {
    VENTAS / CARRITO
 ═══════════════════════════════════════════════════════ */
 
-window.buscarProductoVenta = function() {
+window.buscarProductoVenta = async function() {
   const q    = $('venta-buscar').value.trim();
   const cont = $('venta-sugerencias');
   if (q.length < 1) { cont.innerHTML = ''; return; }
-
-  const filtrados = productos
+ 
+  const listaAnchetas = await getAnchetas();
+ 
+  const prods = productos
     .filter(p => p.nombre.toLowerCase().includes(q.toLowerCase()) ||
                  (p.codigo_barras || '').includes(q))
-    .slice(0, 8);
-
-  if (filtrados.length === 0) {
+    .slice(0, 6)
+    .map(p => ({ ...p, _tipo: 'producto' }));
+ 
+  const anchs = listaAnchetas
+    .filter(a => a.nombre.toLowerCase().includes(q.toLowerCase()))
+    .slice(0, 4)
+    .map(a => ({ ...a, _tipo: 'ancheta' }));
+ 
+  const todos = [...prods, ...anchs];
+ 
+  if (todos.length === 0) {
     cont.innerHTML = '<div class="sugerencias-list"><div class="sugerencia-item" style="color:var(--muted)">Sin resultados</div></div>';
     return;
   }
-  cont.innerHTML = `<div class="sugerencias-list">${filtrados.map(p => `
-    <div class="sugerencia-item" onclick='abrirModalCantidad(${JSON.stringify(p)})'>
+ 
+  cont.innerHTML = `<div class="sugerencias-list">${todos.map(item => {
+    if (item._tipo === 'ancheta') {
+      return `<div class="sugerencia-item" onclick='abrirModalCantidadAncheta(${JSON.stringify(item)})'>
+        <div>
+          <div>🎁 ${item.nombre}</div>
+          <div class="sug-stock">${(item.items||[]).length} productos · Ancheta</div>
+        </div>
+        <span class="sug-precio">${fmtCOP(item.precio_venta)}</span>
+      </div>`;
+    }
+    return `<div class="sugerencia-item" onclick='abrirModalCantidad(${JSON.stringify(item)})'>
       <div>
-        <div>${p.nombre}</div>
-        <div class="sug-stock">${p.stock} ${p.unidad} disponibles</div>
+        <div>${item.nombre}</div>
+        <div class="sug-stock">${item.stock} ${item.unidad} disponibles</div>
       </div>
-      <span class="sug-precio">${fmtCOP(p.precio_venta)}</span>
-    </div>`).join('')}</div>`;
+      <span class="sug-precio">${fmtCOP(item.precio_venta)}</span>
+    </div>`;
+  }).join('')}</div>`;
 };
+ 
 
 window.abrirModalCantidad = function(p) {
   productoParaCarrito = p;
@@ -464,12 +488,49 @@ window.abrirModalCantidad = function(p) {
   $('venta-sugerencias').innerHTML = '';
   openModal('modal-cantidad');
 };
+let anchetaParaCarrito = null;
+ 
+window.abrirModalCantidadAncheta = function(a) {
+  anchetaParaCarrito = a;
+  $('mcant-nombre').textContent = '🎁 ' + a.nombre;
+  $('mcant-label').textContent  = 'Cantidad de anchetas';
+  $('mcant-stock').textContent  = 'Sin límite de stock definido';
+  $('mcant-val').value = 1;
+  $('venta-sugerencias').innerHTML = '';
+  openModal('modal-cantidad');
+};
 
 window.confirmarAgregarCarrito = function() {
   const cant = parseFloat($('mcant-val').value);
-  if (!cant || cant <= 0)             { alert('Cantidad inválida'); return; }
+  if (!cant || cant <= 0) { alert('Cantidad inválida'); return; }
+ 
+  // ¿Es ancheta?
+  if (anchetaParaCarrito && !productoParaCarrito) {
+    const a = anchetaParaCarrito;
+    const existing = carrito.find(c => c._ancheta_id === a.id);
+    if (existing) {
+      existing.cantidad += cant;
+    } else {
+      carrito.push({
+        _ancheta_id:     a.id,
+        _ancheta_items:  a.items,
+        producto_id:     null,
+        nombre_producto: '🎁 ' + a.nombre,
+        cantidad:        cant,
+        precio_unitario: a.precio_venta,
+        precio_compra:   0,
+        unidad:          'unidades'
+      });
+    }
+    anchetaParaCarrito = null;
+    closeModal('modal-cantidad');
+    $('venta-buscar').value = '';
+    renderCarrito();
+    return;
+  }
+ 
+  // Producto normal
   if (cant > productoParaCarrito.stock) { alert('Stock insuficiente'); return; }
-
   const existing = carrito.find(c => c.producto_id === productoParaCarrito.id);
   if (existing) {
     existing.cantidad += cant;
@@ -483,6 +544,7 @@ window.confirmarAgregarCarrito = function() {
       unidad:           productoParaCarrito.unidad
     });
   }
+  productoParaCarrito = null;
   closeModal('modal-cantidad');
   $('venta-buscar').value = '';
   renderCarrito();
@@ -602,11 +664,23 @@ window.confirmarVenta = async function() {
 
   // 2. Descontar stock de cada producto
   for (const item of carrito) {
-    const prodRef  = doc(db(), 'productos', item.producto_id);
-    const prodSnap = await getDoc(prodRef);
-    if (prodSnap.exists()) {
-      const nuevoStock = (prodSnap.data().stock || 0) - item.cantidad;
-      await updateDoc(prodRef, { stock: Math.max(0, nuevoStock) });
+    // Si es ancheta, descontar cada sub-item
+    if (item._ancheta_id) {
+      for (const sub of (item._ancheta_items || [])) {
+        const prodRef  = doc(db(), 'productos', sub.producto_id);
+        const prodSnap = await getDoc(prodRef);
+        if (prodSnap.exists()) {
+          const nuevoStock = (prodSnap.data().stock || 0) - (sub.cantidad * item.cantidad);
+          await updateDoc(prodRef, { stock: Math.max(0, nuevoStock) });
+        }
+      }
+    } else {
+      const prodRef  = doc(db(), 'productos', item.producto_id);
+      const prodSnap = await getDoc(prodRef);
+      if (prodSnap.exists()) {
+        const nuevoStock = (prodSnap.data().stock || 0) - item.cantidad;
+        await updateDoc(prodRef, { stock: Math.max(0, nuevoStock) });
+      }
     }
   }
 
@@ -929,10 +1003,153 @@ document.querySelectorAll('.modal-overlay').forEach(overlay => {
     if (e.target === this) this.classList.remove('open');
   });
 });
+/* ═══════════════════════════════════════════════════════
+   ANCHETAS
+═══════════════════════════════════════════════════════ */
+
+let anchetas = [];
+let editandoAnchetaId = null;
+let itemsAncheta = []; // items del modal en edición
+
+// ── Cargar listado ────────────────────────────────────
+async function loadAnchetas() {
+  const snap = await getDocs(query(collection(db(), 'anchetas'), orderBy('nombre')));
+  anchetas = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  renderAnchetas();
+}
+
+function renderAnchetas() {
+  const tbody = $('anch-body');
+  if (anchetas.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="4" class="empty">No hay anchetas registradas</td></tr>';
+    return;
+  }
+  tbody.innerHTML = anchetas.map(a => `
+    <tr>
+      <td><strong>${a.nombre}</strong></td>
+      <td style="color:var(--muted);font-size:0.85rem">${(a.items||[]).map(i=>`${i.nombre_producto} x${i.cantidad}`).join(', ')}</td>
+      <td><strong style="color:var(--teal)">${fmtCOP(a.precio_venta)}</strong></td>
+      <td style="display:flex;gap:6px">
+        <button class="btn-icon" onclick="openModalAncheta('${a.id}')">Editar</button>
+        <button class="btn-icon del" onclick="eliminarAncheta('${a.id}')">Eliminar</button>
+      </td>
+    </tr>`).join('');
+}
+
+// ── Modal ancheta ─────────────────────────────────────
+window.openModalAncheta = function(id) {
+  editandoAnchetaId = id || null;
+  $('anch-modal-titulo').textContent = id ? 'Editar Ancheta' : 'Nueva Ancheta';
+  $('anch-msg').innerHTML = '';
+
+  if (id) {
+    const a = anchetas.find(x => x.id === id);
+    if (a) {
+      $('anch-nombre').value  = a.nombre;
+      $('anch-precio').value  = a.precio_venta;
+      itemsAncheta = [...(a.items || [])];
+    }
+  } else {
+    $('anch-nombre').value = '';
+    $('anch-precio').value = '';
+    itemsAncheta = [];
+  }
+  renderItemsAncheta();
+  openModal('modal-ancheta');
+};
+
+function renderItemsAncheta() {
+  const cont = $('anch-items-lista');
+  if (itemsAncheta.length === 0) {
+    cont.innerHTML = '<div class="empty" style="padding:12px">Sin productos aún</div>';
+  } else {
+    cont.innerHTML = itemsAncheta.map((it, i) => `
+      <div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)">
+        <span style="flex:1">${it.nombre_producto}</span>
+        <input type="number" min="1" value="${it.cantidad}" style="width:70px"
+          onchange="actualizarCantAncheta(${i}, this.value)"/>
+        <button class="btn-icon del" onclick="quitarItemAncheta(${i})">✕</button>
+      </div>`).join('');
+  }
+}
+
+window.actualizarCantAncheta = function(i, val) {
+  const v = parseFloat(val);
+  if (v > 0) itemsAncheta[i].cantidad = v;
+};
+
+window.quitarItemAncheta = function(i) {
+  itemsAncheta.splice(i, 1);
+  renderItemsAncheta();
+};
+
+window.buscarProductoAncheta = function() {
+  const q    = $('anch-buscar').value.trim();
+  const cont = $('anch-sugerencias');
+  if (q.length < 1) { cont.innerHTML = ''; return; }
+  const filtrados = productos.filter(p =>
+    p.nombre.toLowerCase().includes(q.toLowerCase())
+  ).slice(0, 6);
+  if (filtrados.length === 0) { cont.innerHTML = '<div style="color:var(--muted);padding:8px">Sin resultados</div>'; return; }
+  cont.innerHTML = filtrados.map(p => `
+    <div class="sugerencia-item" onclick="agregarProductoAncheta('${p.id}','${p.nombre.replace(/'/g,"\\'")}')">
+      <span>${p.nombre}</span>
+      <span class="sug-stock">${p.stock} ${p.unidad}</span>
+    </div>`).join('');
+};
+
+window.agregarProductoAncheta = function(pid, nombre) {
+  const existe = itemsAncheta.find(i => i.producto_id === pid);
+  if (existe) { existe.cantidad += 1; }
+  else { itemsAncheta.push({ producto_id: pid, nombre_producto: nombre, cantidad: 1 }); }
+  $('anch-buscar').value = '';
+  $('anch-sugerencias').innerHTML = '';
+  renderItemsAncheta();
+};
+
+window.guardarAncheta = async function() {
+  const nombre      = $('anch-nombre').value.trim();
+  const precio_venta = parseFloat($('anch-precio').value);
+  if (!nombre || isNaN(precio_venta)) {
+    showMsg('anch-msg', 'Nombre y precio son obligatorios.', 'error'); return;
+  }
+  if (itemsAncheta.length === 0) {
+    showMsg('anch-msg', 'Agrega al menos un producto.', 'error'); return;
+  }
+  const data = { nombre, precio_venta, items: itemsAncheta };
+
+  if (editandoAnchetaId) {
+    await updateDoc(doc(db(), 'anchetas', editandoAnchetaId), data);
+    showMsg('anch-list-msg', 'Ancheta actualizada.', 'ok');
+  } else {
+    data.fecha_creacion = serverTimestamp();
+    await addDoc(collection(db(), 'anchetas'), data);
+    showMsg('anch-list-msg', 'Ancheta creada.', 'ok');
+  }
+  closeModal('modal-ancheta');
+  loadAnchetas();
+};
+
+window.eliminarAncheta = async function(id) {
+  if (!confirm('¿Eliminar esta ancheta?')) return;
+  await deleteDoc(doc(db(), 'anchetas', id));
+  showMsg('anch-list-msg', 'Ancheta eliminada.', 'warn');
+  loadAnchetas();
+};
+
+// ── Buscar ancheta desde ventas ───────────────────────
+// Se llama desde buscarProductoVenta — ya integrado abajo
+async function getAnchetas() {
+  if (anchetas.length > 0) return anchetas;
+  const snap = await getDocs(query(collection(db(), 'anchetas'), orderBy('nombre')));
+  anchetas = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  return anchetas;
+}
 
 /* ═══════════════════════════════════════════════════════
    INIT  — llamado desde index.html tras autenticación
 ═══════════════════════════════════════════════════════ */
+
 
 window.initApp = async function() {
   const hoy = new Date().toISOString().split('T')[0];
@@ -940,6 +1157,7 @@ window.initApp = async function() {
   $('inf-hasta').value = hoy;
 
   productos = await getProductos();
+  anchetas = await getAnchetas();
 
   loadDashboard();
   renderCarrito();
