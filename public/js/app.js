@@ -1,15 +1,18 @@
 /* ════════════════════════════════════════════════════
-   SistemaHíbrido — app.js  (Firestore edition)
+   SistemaHíbrido — app.js  (Firestore optimizado)
+   - Caché local para productos y anchetas
+   - Inventario virtual con búsqueda local (no re-lee Firestore)
+   - onSnapshot eliminado (era el mayor consumidor)
+   - Anulación de ventas de anchetas corregida
+   - Inventario paginado para soportar 2000+ productos
    ════════════════════════════════════════════════════ */
 
-// ── Firestore helpers (cargados desde index.html) ────
 import {
   collection, doc, getDocs, getDoc, addDoc, setDoc,
   updateDoc, deleteDoc, query, where, orderBy,
-  serverTimestamp, Timestamp
+  serverTimestamp, limit, startAfter
 } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
 
-// Esperar a que window.__db esté disponible (lo pone el módulo de Firebase en index.html)
 function db() { return window.__db; }
 
 // ── Utils ─────────────────────────────────────────────
@@ -20,32 +23,71 @@ const $      = id => document.getElementById(id);
 function tsToDate(ts) {
   if (!ts) return new Date();
   if (ts instanceof Date) return ts;
-  if (ts.toDate) return ts.toDate();          // Firestore Timestamp
+  if (ts.toDate) return ts.toDate();
   return new Date(ts);
 }
-function fmtHora(ts)      { return tsToDate(ts).toLocaleTimeString('es-CO',  { hour:'2-digit', minute:'2-digit' }); }
+function fmtHora(ts)      { return tsToDate(ts).toLocaleTimeString('es-CO', { hour:'2-digit', minute:'2-digit' }); }
 function fmtFecha(ts)     { return tsToDate(ts).toLocaleDateString('es-CO'); }
 function fmtFechaHora(ts) { return fmtFecha(ts) + ' · ' + fmtHora(ts); }
 
-// Clave de fecha local (Colombia) YYYY-MM-DD — sin conversión UTC
 function fechaLocal(d = new Date()) {
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 }
 
-// Icono/label para medio de pago
 function labelMedioPago(mp) {
   const map = { efectivo: '💵 Efectivo', nequi: '🟣 Nequi', daviplata: '🔴 Daviplata' };
   return map[mp] || mp || 'Efectivo';
 }
 
+// ── Caché global (UNA sola lectura de Firestore por sesión) ──
+let _productosCache  = null;   // null = sin cargar aún
+let _anchetasCache   = null;
+let _ajustesCache    = null;
+
+// Timestamp de última carga para invalidar si llevan +30 min
+let _productosCargadoEn = 0;
+const CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutos
+
+async function getProductos(forzar = false) {
+  const ahora = Date.now();
+  if (!forzar && _productosCache && (ahora - _productosCargadoEn) < CACHE_TTL_MS) {
+    return _productosCache;
+  }
+  const snap = await getDocs(collection(db(), 'productos'));
+  _productosCache    = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  _productosCargadoEn = ahora;
+  return _productosCache;
+}
+
+async function getAnchetas(forzar = false) {
+  if (!forzar && _anchetasCache) return _anchetasCache;
+  const snap = await getDocs(query(collection(db(), 'anchetas'), orderBy('nombre')));
+  _anchetasCache = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  return _anchetasCache;
+}
+
+// Invalida caché de productos (después de crear/editar/eliminar)
+function invalidarProductos() {
+  _productosCache    = null;
+  _productosCargadoEn = 0;
+}
+function invalidarAnchetas() { _anchetasCache = null; }
+
 // ── State ─────────────────────────────────────────────
-let productos = [];
+let productos = [];   // alias local del caché
+let anchetas  = [];
 let carrito   = [];
 let editandoProductoId  = null;
 let entradaProductoId   = null;
 let productoParaCarrito = null;
+let anchetaParaCarrito  = null;
 let calAnio = new Date().getFullYear();
 let calMes  = new Date().getMonth() + 1;
+
+// Paginación inventario
+const INV_PAGE_SIZE = 50;
+let invPagina = 0;
+let invFiltro = '';
 
 // ── Connection status ─────────────────────────────────
 function updateConnStatus() {
@@ -63,13 +105,13 @@ window.switchTab = function(name, el) {
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
   $('tab-' + name).classList.add('active');
   if (el) el.classList.add('active');
-  if (name === 'dashboard') loadDashboard();
-  if (name === 'inventario') loadInventario();
+  // Solo carga desde Firestore en primera visita o tabs que siempre necesitan datos frescos
+  if (name === 'dashboard')  loadDashboard();
+  if (name === 'inventario') renderInventarioPaginado();   // usa caché
   if (name === 'calendario') renderCalendario();
   if (name === 'cierre')     loadCierreHistorial();
   if (name === 'ajustes')    loadAjustes();
-  if (name === 'ajustes')    loadAjustes();
-  if (name === 'anchetas')   loadAnchetas();  // ← aquí
+  if (name === 'anchetas')   renderAnchetas();             // usa caché
 };
 
 // ── Messages ──────────────────────────────────────────
@@ -81,23 +123,8 @@ function showMsg(elId, text, type = 'ok') {
 }
 
 /* ═══════════════════════════════════════════════════════
-   PRODUCTOS
+   VENTAS
 ═══════════════════════════════════════════════════════ */
-
-async function getProductos() {
-  const snap = await getDocs(collection(db(), 'productos'));
-  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
-}
-
-async function getProductosAlertas() {
-  const todos = await getProductos();
-  return todos.filter(p => p.stock <= p.stock_minimo);
-}
-
-/* ═══════════════════════════════════════════════════════
-   VENTAS  (hoy y por fecha)
-═══════════════════════════════════════════════════════ */
-
 async function getVentasHoy() {
   const hoy = fechaLocal();
   const snap = await getDocs(
@@ -128,20 +155,18 @@ async function getVentasRango(desde, hasta) {
 }
 
 /* ═══════════════════════════════════════════════════════
-   DASHBOARD
+   DASHBOARD  — una sola llamada paralela
 ═══════════════════════════════════════════════════════ */
-
 async function loadDashboard() {
   const hoy = new Date();
   $('fecha-hoy').textContent = hoy.toLocaleDateString('es-CO', { weekday:'long', year:'numeric', month:'long', day:'numeric' });
 
+  // Paralelo: productos (caché) + ventas hoy (siempre fresco)
   const [prods, todasVentas] = await Promise.all([getProductos(), getVentasHoy()]);
+  productos = prods;
 
-  // Excluir ventas anuladas para totales
   const ventas  = todasVentas.filter(v => !v.anulada);
   const alertas = prods.filter(p => p.stock <= p.stock_minimo);
-
-  productos = prods;  // actualizar cache global
 
   $('d-productos').textContent  = prods.length;
   $('d-ventas-hoy').textContent = ventas.length;
@@ -151,7 +176,6 @@ async function loadDashboard() {
   const card = $('d-alertas-card');
   alertas.length > 0 ? card.classList.add('warn') : card.classList.remove('warn');
 
-  // Alertas list
   const alertEl = $('dash-alertas-list');
   if (alertas.length === 0) {
     alertEl.innerHTML = '<div class="empty">✓ Todo el stock está en niveles normales</div>';
@@ -170,16 +194,15 @@ async function loadDashboard() {
     }).join('');
   }
 
-  // Ventas hoy — mostrar todas (incluidas anuladas) con indicador visual
   const tbody = $('dash-ventas-body');
   if (todasVentas.length === 0) {
     tbody.innerHTML = '<tr><td colspan="6" class="empty">Sin ventas hoy</td></tr>';
   } else {
     tbody.innerHTML = todasVentas.map((v, i) => {
-      const anulada    = v.anulada === true;
-      const rowStyle   = anulada ? 'opacity:0.45;text-decoration:line-through' : '';
-      const badgePago  = `<span class="badge" style="text-transform:capitalize;font-size:11px">${labelMedioPago(v.medio_pago)}</span>`;
-      const btnAnular  = anulada
+      const anulada   = v.anulada === true;
+      const rowStyle  = anulada ? 'opacity:0.45;text-decoration:line-through' : '';
+      const badgePago = `<span class="badge" style="text-transform:capitalize;font-size:11px">${labelMedioPago(v.medio_pago)}</span>`;
+      const btnAnular = anulada
         ? `<span style="color:var(--red,#ff6b6b);font-size:11px;font-weight:600">ANULADA</span>`
         : `<button class="btn-icon del" onclick="anularVenta('${v.id}')">Anular</button>`;
       return `<tr style="${rowStyle}">
@@ -198,92 +221,122 @@ async function loadDashboard() {
 }
 
 /* ═══════════════════════════════════════════════════════
-   ANULAR VENTA  (devuelve stock)
+   ANULAR VENTA  — soporta productos normales Y anchetas
 ═══════════════════════════════════════════════════════ */
-
 window.anularVenta = async function(ventaId) {
   if (!confirm('¿Anular esta venta? El stock de los productos será devuelto.')) return;
 
   const ventaSnap = await getDoc(doc(db(), 'ventas', ventaId));
   if (!ventaSnap.exists()) { alert('Venta no encontrada'); return; }
   const v = ventaSnap.data();
-
   if (v.anulada) { alert('Esta venta ya fue anulada.'); return; }
 
-  // 1. Devolver stock de cada ítem
+  // Devolver stock — distingue producto normal vs ancheta
   for (const item of (v.items || [])) {
-    const prodRef  = doc(db(), 'productos', item.producto_id);
-    const prodSnap = await getDoc(prodRef);
-    if (prodSnap.exists()) {
-      const stockActual = prodSnap.data().stock || 0;
-      await updateDoc(prodRef, { stock: stockActual + item.cantidad });
+    if (item._ancheta_id) {
+      // Es una ancheta: devolver stock de cada sub-item
+      for (const sub of (item._ancheta_items || [])) {
+        const prodRef  = doc(db(), 'productos', sub.producto_id);
+        const prodSnap = await getDoc(prodRef);
+        if (prodSnap.exists()) {
+          const stockActual = prodSnap.data().stock || 0;
+          await updateDoc(prodRef, { stock: stockActual + (sub.cantidad * item.cantidad) });
+        }
+      }
+    } else {
+      // Producto normal
+      const prodRef  = doc(db(), 'productos', item.producto_id);
+      const prodSnap = await getDoc(prodRef);
+      if (prodSnap.exists()) {
+        const stockActual = prodSnap.data().stock || 0;
+        await updateDoc(prodRef, { stock: stockActual + item.cantidad });
+      }
     }
   }
 
-  // 2. Marcar venta como anulada (conservar para historial)
   await updateDoc(doc(db(), 'ventas', ventaId), {
     anulada:         true,
     fecha_anulacion: serverTimestamp()
   });
 
-  showMsg('dash-msg', '✓ Venta anulada y stock devuelto correctamente.', 'warn');
-
-  // Refrescar cache de productos y dashboard
+  // Invalidar caché de productos para que refleje stocks actualizados
+  invalidarProductos();
   productos = await getProductos();
+
+  showMsg('dash-msg', '✓ Venta anulada y stock devuelto correctamente.', 'warn');
   loadDashboard();
 };
 
 /* ═══════════════════════════════════════════════════════
-   INVENTARIO
+   INVENTARIO  — paginado + búsqueda local (sin re-leer Firestore)
 ═══════════════════════════════════════════════════════ */
+function renderInventarioPaginado() {
+  const lista   = invFiltro
+    ? productos.filter(p =>
+        p.nombre.toLowerCase().includes(invFiltro) ||
+        (p.categoria || '').toLowerCase().includes(invFiltro) ||
+        (p.codigo_barras || '').includes(invFiltro))
+    : productos;
 
-async function loadInventario() {
-  productos = await getProductos();
-  renderInventario(productos);
-}
+  const total   = lista.length;
+  const inicio  = invPagina * INV_PAGE_SIZE;
+  const fin     = inicio + INV_PAGE_SIZE;
+  const pagina  = lista.slice(inicio, fin);
+  const totalPags = Math.ceil(total / INV_PAGE_SIZE);
 
-function renderInventario(list) {
   const tbody = $('inv-body');
-  if (list.length === 0) {
+  if (pagina.length === 0) {
     tbody.innerHTML = '<tr><td colspan="9" class="empty">No hay productos registrados</td></tr>';
-    return;
+  } else {
+    tbody.innerHTML = pagina.map(p => {
+      let estado, badge;
+      if (p.stock === 0)                  { estado = 'Agotado'; badge = 'badge-agotado'; }
+      else if (p.stock <= p.stock_minimo) { estado = 'Bajo';    badge = 'badge-bajo'; }
+      else                                { estado = 'OK';      badge = 'badge-ok'; }
+      return `<tr>
+        <td><strong>${p.nombre}</strong></td>
+        <td>${p.categoria || '—'}</td>
+        <td>${fmtCOP(p.precio_compra)}</td>
+        <td><strong style="color:var(--teal)">${fmtCOP(p.precio_venta)}</strong></td>
+        <td>${p.stock}</td>
+        <td>${p.stock_minimo}</td>
+        <td style="color:var(--muted)">${p.unidad}</td>
+        <td><span class="badge ${badge}">${estado}</span></td>
+        <td style="display:flex;gap:6px;flex-wrap:wrap">
+          <button class="btn-icon" onclick="openModalProducto('${p.id}')">Editar</button>
+          <button class="btn-icon" onclick="openModalEntrada('${p.id}')">+Stock</button>
+          <button class="btn-icon del" onclick="eliminarProducto('${p.id}')">Eliminar</button>
+        </td>
+      </tr>`;
+    }).join('');
   }
-  tbody.innerHTML = list.map(p => {
-    let estado, badge;
-    if (p.stock === 0)                    { estado = 'Agotado'; badge = 'badge-agotado'; }
-    else if (p.stock <= p.stock_minimo)   { estado = 'Bajo';    badge = 'badge-bajo'; }
-    else                                  { estado = 'OK';      badge = 'badge-ok'; }
-    return `<tr>
-      <td><strong>${p.nombre}</strong></td>
-      <td>${p.categoria || '—'}</td>
-      <td>${fmtCOP(p.precio_compra)}</td>
-      <td><strong style="color:var(--teal)">${fmtCOP(p.precio_venta)}</strong></td>
-      <td>${p.stock}</td>
-      <td>${p.stock_minimo}</td>
-      <td style="color:var(--muted)">${p.unidad}</td>
-      <td><span class="badge ${badge}">${estado}</span></td>
-      <td style="display:flex;gap:6px;flex-wrap:wrap">
-        <button class="btn-icon" onclick="openModalProducto('${p.id}')">Editar</button>
-        <button class="btn-icon" onclick="openModalEntrada('${p.id}')">+Stock</button>
-        <button class="btn-icon del" onclick="eliminarProducto('${p.id}')">Eliminar</button>
-      </td>
-    </tr>`;
-  }).join('');
+
+  // Controles de paginación
+  let paginaHtml = `<div style="display:flex;align-items:center;gap:10px;justify-content:flex-end;padding:12px 0;font-size:0.85rem;color:var(--muted)">
+    <span>${total} productos · Página ${invPagina+1} de ${totalPags || 1}</span>
+    <button class="btn-secondary" style="padding:4px 12px" onclick="invIrPagina(${invPagina-1})" ${invPagina===0?'disabled':''}>‹ Ant</button>
+    <button class="btn-secondary" style="padding:4px 12px" onclick="invIrPagina(${invPagina+1})" ${invPagina>=totalPags-1?'disabled':''}>Sig ›</button>
+  </div>`;
+  const paginacionEl = $('inv-paginacion');
+  if (paginacionEl) paginacionEl.innerHTML = paginaHtml;
 }
+
+window.invIrPagina = function(pag) {
+  const lista  = invFiltro ? productos.filter(p => p.nombre.toLowerCase().includes(invFiltro)) : productos;
+  const maxPag = Math.ceil(lista.length / INV_PAGE_SIZE) - 1;
+  invPagina = Math.max(0, Math.min(pag, maxPag));
+  renderInventarioPaginado();
+};
 
 window.filtrarInventario = function() {
-  const q = $('inv-search').value.toLowerCase();
-  renderInventario(productos.filter(p =>
-    p.nombre.toLowerCase().includes(q) ||
-    (p.categoria || '').toLowerCase().includes(q) ||
-    (p.codigo_barras || '').includes(q)
-  ));
+  invFiltro = $('inv-search').value.toLowerCase().trim();
+  invPagina = 0;
+  renderInventarioPaginado();
 };
 
 /* ═══════════════════════════════════════════════════════
-   MODAL PRODUCTO  (crear / editar)
+   MODAL PRODUCTO
 ═══════════════════════════════════════════════════════ */
-
 window.openModalProducto = function(id) {
   editandoProductoId = id || null;
   $('modal-titulo').textContent   = id ? 'Editar Producto' : 'Nuevo Producto';
@@ -292,7 +345,7 @@ window.openModalProducto = function(id) {
   $('margen-display') && ($('margen-display').style.display = 'none');
   ['p-nombre','p-categoria','p-compra','p-venta','p-stock','p-barras'].forEach(f => $(f).value = '');
   $('p-stockmin').value = 5;
-  $('p-unidad').value = 'unidades';
+  $('p-unidad').value   = 'unidades';
 
   if (id) {
     const p = productos.find(x => x.id === id);
@@ -312,8 +365,8 @@ window.openModalProducto = function(id) {
 };
 
 window.calcMargen = function() {
-  const compra = parseFloat($('p-compra').value) || 0;
-  const venta  = parseFloat($('p-venta').value)  || 0;
+  const compra  = parseFloat($('p-compra').value) || 0;
+  const venta   = parseFloat($('p-venta').value)  || 0;
   const display = $('margen-display');
   if (venta > 0 && compra > 0) {
     const ganancia = venta - compra;
@@ -352,27 +405,37 @@ window.guardarProducto = async function() {
 
   if (editandoProductoId) {
     await updateDoc(doc(db(), 'productos', editandoProductoId), data);
+    // Actualizar en caché local sin re-leer Firestore
+    const idx = _productosCache?.findIndex(p => p.id === editandoProductoId);
+    if (idx !== undefined && idx >= 0) _productosCache[idx] = { id: editandoProductoId, ...data };
     showMsg('inv-msg', 'Producto actualizado correctamente.', 'ok');
   } else {
     data.fecha_creacion = serverTimestamp();
-    await addDoc(collection(db(), 'productos'), data);
+    const ref = await addDoc(collection(db(), 'productos'), data);
+    // Agregar al caché local
+    if (_productosCache) _productosCache.push({ id: ref.id, ...data });
     showMsg('inv-msg', 'Producto creado correctamente.', 'ok');
   }
+  productos = _productosCache || [];
   closeModal('modal-producto');
-  loadInventario();
+  renderInventarioPaginado();
 };
 
 window.eliminarProducto = async function(id) {
   if (!confirm('¿Eliminar este producto? Esta acción no se puede deshacer.')) return;
   await deleteDoc(doc(db(), 'productos', id));
+  if (_productosCache) {
+    const idx = _productosCache.findIndex(p => p.id === id);
+    if (idx >= 0) _productosCache.splice(idx, 1);
+  }
+  productos = _productosCache || [];
   showMsg('inv-msg', 'Producto eliminado.', 'warn');
-  loadInventario();
+  renderInventarioPaginado();
 };
 
 /* ═══════════════════════════════════════════════════════
    MODAL ENTRADA DE INVENTARIO
 ═══════════════════════════════════════════════════════ */
-
 window.openModalEntrada = async function(id) {
   entradaProductoId = id;
   const p = productos.find(x => x.id === id);
@@ -381,23 +444,21 @@ window.openModalEntrada = async function(id) {
   $('ent-precio').value   = p ? p.precio_compra : '';
   $('ent-nota').value     = '';
 
-  // Historial de entradas (subcolección del producto)
+  // Historial — solo últimas 10 entradas (subcolección, lecturas acotadas)
   const snap = await getDocs(
-    query(collection(db(), 'productos', id, 'entradas'), orderBy('fecha', 'desc'))
+    query(collection(db(), 'productos', id, 'entradas'), orderBy('fecha', 'desc'), limit(10))
   );
   const entradas = snap.docs.map(d => d.data());
   const tbody = $('ent-historial-body');
-  if (entradas.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="4" class="empty">Sin historial</td></tr>';
-  } else {
-    tbody.innerHTML = entradas.slice(0, 10).map(e => `
-      <tr>
-        <td>${fmtFecha(e.fecha)}</td>
-        <td>+${e.cantidad}</td>
-        <td>${e.precio_compra ? fmtCOP(e.precio_compra) : '—'}</td>
-        <td style="color:var(--muted)">${e.nota || '—'}</td>
-      </tr>`).join('');
-  }
+  tbody.innerHTML = entradas.length === 0
+    ? '<tr><td colspan="4" class="empty">Sin historial</td></tr>'
+    : entradas.map(e => `
+        <tr>
+          <td>${fmtFecha(e.fecha)}</td>
+          <td>+${e.cantidad}</td>
+          <td>${e.precio_compra ? fmtCOP(e.precio_compra) : '—'}</td>
+          <td style="color:var(--muted)">${e.nota || '—'}</td>
+        </tr>`).join('');
   openModal('modal-entrada');
 };
 
@@ -408,7 +469,6 @@ window.guardarEntrada = async function() {
   const precio_compra = parseFloat($('ent-precio').value) || null;
   const nota          = $('ent-nota').value.trim() || null;
 
-  // 1. Guardar entrada en subcolección
   await addDoc(collection(db(), 'productos', entradaProductoId, 'entradas'), {
     cantidad,
     precio_compra: precio_compra || 0,
@@ -416,48 +476,53 @@ window.guardarEntrada = async function() {
     fecha: serverTimestamp()
   });
 
-  // 2. Actualizar stock (y precio_compra si se indicó)
-  const prodRef = doc(db(), 'productos', entradaProductoId);
+  const prodRef  = doc(db(), 'productos', entradaProductoId);
   const prodSnap = await getDoc(prodRef);
   const stockActual = prodSnap.data().stock || 0;
   const update = { stock: stockActual + cantidad };
   if (precio_compra) update.precio_compra = precio_compra;
   await updateDoc(prodRef, update);
 
+  // Actualizar caché local
+  const idx = _productosCache?.findIndex(p => p.id === entradaProductoId);
+  if (idx !== undefined && idx >= 0) {
+    _productosCache[idx].stock = stockActual + cantidad;
+    if (precio_compra) _productosCache[idx].precio_compra = precio_compra;
+  }
+  productos = _productosCache || [];
+
   closeModal('modal-entrada');
   showMsg('inv-msg', `Entrada de ${cantidad} unidades registrada.`, 'ok');
-  loadInventario();
+  renderInventarioPaginado();
 };
 
 /* ═══════════════════════════════════════════════════════
    VENTAS / CARRITO
 ═══════════════════════════════════════════════════════ */
-
 window.buscarProductoVenta = async function() {
   const q    = $('venta-buscar').value.trim();
   const cont = $('venta-sugerencias');
   if (q.length < 1) { cont.innerHTML = ''; return; }
- 
-  const listaAnchetas = await getAnchetas();
- 
+
+  // Usa caché — no llama Firestore
+  const qLow = q.toLowerCase();
   const prods = productos
-    .filter(p => p.nombre.toLowerCase().includes(q.toLowerCase()) ||
-                 (p.codigo_barras || '').includes(q))
+    .filter(p => p.nombre.toLowerCase().includes(qLow) || (p.codigo_barras || '').includes(q))
     .slice(0, 6)
     .map(p => ({ ...p, _tipo: 'producto' }));
- 
-  const anchs = listaAnchetas
-    .filter(a => a.nombre.toLowerCase().includes(q.toLowerCase()))
+
+  const anchs = anchetas
+    .filter(a => a.nombre.toLowerCase().includes(qLow))
     .slice(0, 4)
     .map(a => ({ ...a, _tipo: 'ancheta' }));
- 
+
   const todos = [...prods, ...anchs];
- 
+
   if (todos.length === 0) {
     cont.innerHTML = '<div class="sugerencias-list"><div class="sugerencia-item" style="color:var(--muted)">Sin resultados</div></div>';
     return;
   }
- 
+
   cont.innerHTML = `<div class="sugerencias-list">${todos.map(item => {
     if (item._tipo === 'ancheta') {
       return `<div class="sugerencia-item" onclick='abrirModalCantidadAncheta(${JSON.stringify(item)})'>
@@ -477,10 +542,10 @@ window.buscarProductoVenta = async function() {
     </div>`;
   }).join('')}</div>`;
 };
- 
 
 window.abrirModalCantidad = function(p) {
   productoParaCarrito = p;
+  anchetaParaCarrito  = null;
   $('mcant-nombre').textContent = p.nombre;
   $('mcant-label').textContent  = `Cantidad (${p.unidad})`;
   $('mcant-stock').textContent  = `${p.stock} ${p.unidad}`;
@@ -488,10 +553,10 @@ window.abrirModalCantidad = function(p) {
   $('venta-sugerencias').innerHTML = '';
   openModal('modal-cantidad');
 };
-let anchetaParaCarrito = null;
- 
+
 window.abrirModalCantidadAncheta = function(a) {
-  anchetaParaCarrito = a;
+  anchetaParaCarrito  = a;
+  productoParaCarrito = null;
   $('mcant-nombre').textContent = '🎁 ' + a.nombre;
   $('mcant-label').textContent  = 'Cantidad de anchetas';
   $('mcant-stock').textContent  = 'Sin límite de stock definido';
@@ -503,14 +568,12 @@ window.abrirModalCantidadAncheta = function(a) {
 window.confirmarAgregarCarrito = function() {
   const cant = parseFloat($('mcant-val').value);
   if (!cant || cant <= 0) { alert('Cantidad inválida'); return; }
- 
-  // ¿Es ancheta?
-  if (anchetaParaCarrito && !productoParaCarrito) {
+
+  if (anchetaParaCarrito) {
     const a = anchetaParaCarrito;
     const existing = carrito.find(c => c._ancheta_id === a.id);
-    if (existing) {
-      existing.cantidad += cant;
-    } else {
+    if (existing) { existing.cantidad += cant; }
+    else {
       carrito.push({
         _ancheta_id:     a.id,
         _ancheta_items:  a.items,
@@ -523,28 +586,23 @@ window.confirmarAgregarCarrito = function() {
       });
     }
     anchetaParaCarrito = null;
-    closeModal('modal-cantidad');
-    $('venta-buscar').value = '';
-    renderCarrito();
-    return;
+  } else if (productoParaCarrito) {
+    if (cant > productoParaCarrito.stock) { alert('Stock insuficiente'); return; }
+    const existing = carrito.find(c => c.producto_id === productoParaCarrito.id);
+    if (existing) { existing.cantidad += cant; }
+    else {
+      carrito.push({
+        producto_id:     productoParaCarrito.id,
+        nombre_producto: productoParaCarrito.nombre,
+        cantidad:        cant,
+        precio_unitario: productoParaCarrito.precio_venta,
+        precio_compra:   productoParaCarrito.precio_compra || 0,
+        unidad:          productoParaCarrito.unidad
+      });
+    }
+    productoParaCarrito = null;
   }
- 
-  // Producto normal
-  if (cant > productoParaCarrito.stock) { alert('Stock insuficiente'); return; }
-  const existing = carrito.find(c => c.producto_id === productoParaCarrito.id);
-  if (existing) {
-    existing.cantidad += cant;
-  } else {
-    carrito.push({
-      producto_id:      productoParaCarrito.id,
-      nombre_producto:  productoParaCarrito.nombre,
-      cantidad:         cant,
-      precio_unitario:  productoParaCarrito.precio_venta,
-      precio_compra:    productoParaCarrito.precio_compra || 0,
-      unidad:           productoParaCarrito.unidad
-    });
-  }
-  productoParaCarrito = null;
+
   closeModal('modal-cantidad');
   $('venta-buscar').value = '';
   renderCarrito();
@@ -572,13 +630,8 @@ window.actualizarCantCarrito = function(i, val) {
   if (v > 0) carrito[i].cantidad = v;
   renderCarrito();
 };
-
-window.eliminarCarrito = function(i) {
-  carrito.splice(i, 1);
-  renderCarrito();
-};
-
-window.limpiarCarrito = function() {
+window.eliminarCarrito  = function(i) { carrito.splice(i, 1); renderCarrito(); };
+window.limpiarCarrito   = function() {
   carrito = [];
   $('cart-descuento').value    = '';
   $('cart-efectivo').value     = '';
@@ -611,7 +664,6 @@ window.calcVuelto = function() {
   }
 };
 
-// ── MEDIO DE PAGO ─────────────────────────────────────
 window.actualizarMedioPago = function() {
   const val = document.querySelector('input[name="medio_pago"]:checked')?.value || 'efectivo';
   ['efectivo','nequi','daviplata'].forEach(mp => {
@@ -628,26 +680,22 @@ window.actualizarMedioPago = function() {
     }
   });
   const bloqueEfectivo = document.getElementById('bloque-efectivo');
-  if (bloqueEfectivo) {
-    bloqueEfectivo.style.display = val === 'efectivo' ? 'block' : 'none';
-  }
+  if (bloqueEfectivo) bloqueEfectivo.style.display = val === 'efectivo' ? 'block' : 'none';
 };
 
 window.confirmarVenta = async function() {
   if (carrito.length === 0) { alert('El carrito está vacío'); return; }
 
-  const sub     = carrito.reduce((s, c) => s + c.cantidad * c.precio_unitario, 0);
-  const descVal = parseFloat($('cart-descuento').value) || 0;
-  const tipo    = $('cart-desc-tipo').value;
-  const desc    = tipo === 'pct' ? (sub * descVal / 100) : descVal;
-  const total   = Math.max(0, sub - desc);
+  const sub      = carrito.reduce((s, c) => s + c.cantidad * c.precio_unitario, 0);
+  const descVal  = parseFloat($('cart-descuento').value) || 0;
+  const tipo     = $('cart-desc-tipo').value;
+  const desc     = tipo === 'pct' ? (sub * descVal / 100) : descVal;
+  const total    = Math.max(0, sub - desc);
   const efectivo = parseFloat($('cart-efectivo').value) || null;
   const medio_pago = document.querySelector('input[name="medio_pago"]:checked')?.value || 'efectivo';
-  const ahora   = new Date();
+  const ahora    = new Date();
+  const resumen  = carrito.map(c => `${c.nombre_producto} x${c.cantidad}`).join(', ');
 
-  const resumen = carrito.map(c => `${c.nombre_producto} x${c.cantidad}`).join(', ');
-
-  // 1. Guardar venta
   const ventaRef = await addDoc(collection(db(), 'ventas'), {
     items:             carrito.map(c => ({ ...c })),
     productos_resumen: resumen,
@@ -662,49 +710,65 @@ window.confirmarVenta = async function() {
     fecha_key:         fechaLocal(ahora)
   });
 
-  // 2. Descontar stock de cada producto
+  // Descontar stock — actualiza Firestore Y caché local en paralelo por producto
+  const stockUpdates = [];
   for (const item of carrito) {
-    // Si es ancheta, descontar cada sub-item
     if (item._ancheta_id) {
       for (const sub of (item._ancheta_items || [])) {
-        const prodRef  = doc(db(), 'productos', sub.producto_id);
-        const prodSnap = await getDoc(prodRef);
-        if (prodSnap.exists()) {
-          const nuevoStock = (prodSnap.data().stock || 0) - (sub.cantidad * item.cantidad);
-          await updateDoc(prodRef, { stock: Math.max(0, nuevoStock) });
-        }
+        stockUpdates.push(
+          (async () => {
+            const prodRef  = doc(db(), 'productos', sub.producto_id);
+            const prodSnap = await getDoc(prodRef);
+            if (prodSnap.exists()) {
+              const nuevoStock = Math.max(0, (prodSnap.data().stock || 0) - (sub.cantidad * item.cantidad));
+              await updateDoc(prodRef, { stock: nuevoStock });
+              // Actualizar caché
+              const idx = _productosCache?.findIndex(p => p.id === sub.producto_id);
+              if (idx !== undefined && idx >= 0) _productosCache[idx].stock = nuevoStock;
+            }
+          })()
+        );
       }
     } else {
-      const prodRef  = doc(db(), 'productos', item.producto_id);
-      const prodSnap = await getDoc(prodRef);
-      if (prodSnap.exists()) {
-        const nuevoStock = (prodSnap.data().stock || 0) - item.cantidad;
-        await updateDoc(prodRef, { stock: Math.max(0, nuevoStock) });
-      }
+      stockUpdates.push(
+        (async () => {
+          const prodRef  = doc(db(), 'productos', item.producto_id);
+          const prodSnap = await getDoc(prodRef);
+          if (prodSnap.exists()) {
+            const nuevoStock = Math.max(0, (prodSnap.data().stock || 0) - item.cantidad);
+            await updateDoc(prodRef, { stock: nuevoStock });
+            const idx = _productosCache?.findIndex(p => p.id === item.producto_id);
+            if (idx !== undefined && idx >= 0) _productosCache[idx].stock = nuevoStock;
+          }
+        })()
+      );
     }
   }
+  await Promise.all(stockUpdates);
+  productos = _productosCache || [];
 
   showMsg('venta-msg', `✓ Venta registrada. Total: ${fmtCOP(total)}`, 'ok');
-
   if (confirm('Venta registrada. ¿Descargar factura PDF?')) {
     await imprimirFactura(ventaRef.id);
   }
-
   limpiarCarrito();
-  productos = await getProductos();
 };
 
 /* ═══════════════════════════════════════════════════════
-   FACTURA  (generación en navegador con window.print)
+   FACTURA
 ═══════════════════════════════════════════════════════ */
-
 window.imprimirFactura = async function(ventaId) {
   const ventaSnap = await getDoc(doc(db(), 'ventas', ventaId));
   if (!ventaSnap.exists()) { alert('Venta no encontrada'); return; }
   const v = ventaSnap.data();
 
-  const ajSnap = await getDoc(doc(db(), 'ajustes', 'negocio'));
-  const aj     = ajSnap.exists() ? ajSnap.data() : {};
+  // Usar caché de ajustes
+  let aj = _ajustesCache;
+  if (!aj) {
+    const ajSnap = await getDoc(doc(db(), 'ajustes', 'negocio'));
+    aj = ajSnap.exists() ? ajSnap.data() : {};
+    _ajustesCache = aj;
+  }
 
   const win = window.open('', '_blank');
   win.document.write(`<!DOCTYPE html><html><head>
@@ -753,7 +817,6 @@ window.imprimirFactura = async function(ventaId) {
 /* ═══════════════════════════════════════════════════════
    CALENDARIO
 ═══════════════════════════════════════════════════════ */
-
 window.renderCalendario = async function() {
   const meses = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
   $('cal-label').textContent = `${meses[calMes-1]} ${calAnio}`;
@@ -761,8 +824,6 @@ window.renderCalendario = async function() {
   const desde = `${calAnio}-${String(calMes).padStart(2,'0')}-01`;
   const hasta = `${calAnio}-${String(calMes).padStart(2,'0')}-31`;
   const todasVentas = await getVentasRango(desde, hasta);
-
-  // Solo ventas NO anuladas para totales del calendario
   const ventas = todasVentas.filter(v => !v.anulada);
 
   const ventasPorDia = {};
@@ -773,10 +834,10 @@ window.renderCalendario = async function() {
     ventasPorDia[key].num_ventas += 1;
   });
 
-  const primerDia  = new Date(calAnio, calMes - 1, 1).getDay();
-  const diasEnMes  = new Date(calAnio, calMes, 0).getDate();
-  const hoy        = new Date();
-  const esHoy      = d => hoy.getFullYear() === calAnio && hoy.getMonth()+1 === calMes && hoy.getDate() === d;
+  const primerDia = new Date(calAnio, calMes - 1, 1).getDay();
+  const diasEnMes = new Date(calAnio, calMes, 0).getDate();
+  const hoy       = new Date();
+  const esHoy     = d => hoy.getFullYear() === calAnio && hoy.getMonth()+1 === calMes && hoy.getDate() === d;
 
   let html = `<div class="cal-grid">
     ${['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'].map(d => `<div class="cal-day-name">${d}</div>`).join('')}
@@ -804,8 +865,8 @@ window.verVentasDia = async function(fecha, dia) {
     tbody.innerHTML = '<tr><td colspan="7" class="empty">Sin ventas este día</td></tr>';
   } else {
     tbody.innerHTML = todasVentas.map((v, i) => {
-      const anulada  = v.anulada === true;
-      const rowStyle = anulada ? 'opacity:0.45;text-decoration:line-through' : '';
+      const anulada   = v.anulada === true;
+      const rowStyle  = anulada ? 'opacity:0.45;text-decoration:line-through' : '';
       const btnAnular = anulada
         ? `<span style="color:var(--red,#ff6b6b);font-size:11px;font-weight:600">ANULADA</span>`
         : `<button class="btn-icon del" onclick="anularVenta('${v.id}')">Anular</button>`;
@@ -837,15 +898,12 @@ window.cambiarMes = function(delta) {
 /* ═══════════════════════════════════════════════════════
    INFORMES
 ═══════════════════════════════════════════════════════ */
-
 window.cargarInformes = async function() {
   const desde = $('inf-desde').value;
   const hasta = $('inf-hasta').value;
   if (!desde || !hasta) { alert('Selecciona un rango de fechas'); return; }
 
   const todasVentas = await getVentasRango(desde, hasta);
-
-  // Solo ventas no anuladas para los totales
   const ventas = todasVentas.filter(v => !v.anulada);
   const total  = ventas.reduce((s, v) => s + (v.total || 0), 0);
 
@@ -858,23 +916,18 @@ window.cargarInformes = async function() {
     cont.innerHTML = '<div class="empty">Sin ventas en el período seleccionado</div>';
     return;
   }
-
   cont.innerHTML = todasVentas.map(v => {
-    const anulada   = v.anulada === true;
-    const cardStyle = anulada ? 'opacity:0.5' : '';
-    const badgeAnulada = anulada
-      ? `<span style="color:var(--red,#ff6b6b);font-size:11px;font-weight:700;margin-left:8px">ANULADA</span>`
-      : '';
-    const btnAnular = anulada
-      ? ''
-      : `<button class="btn-icon del" onclick="anularVenta('${v.id}')">Anular</button>`;
+    const anulada    = v.anulada === true;
+    const cardStyle  = anulada ? 'opacity:0.5' : '';
+    const badgeAn    = anulada ? `<span style="color:var(--red,#ff6b6b);font-size:11px;font-weight:700;margin-left:8px">ANULADA</span>` : '';
+    const btnAnular  = anulada ? '' : `<button class="btn-icon del" onclick="anularVenta('${v.id}')">Anular</button>`;
     return `
     <div class="inf-venta-card" style="${cardStyle}">
       <div class="inf-venta-header">
         <div>
           <span class="inf-venta-id">Venta</span>
           <span class="inf-venta-hora" style="margin-left:12px">${fmtFechaHora(v.fecha)}</span>
-          ${badgeAnulada}
+          ${badgeAn}
         </div>
         <div style="display:flex;align-items:center;gap:10px">
           <span class="badge" style="font-size:11px">${labelMedioPago(v.medio_pago)}</span>
@@ -892,19 +945,15 @@ window.cargarInformes = async function() {
 /* ═══════════════════════════════════════════════════════
    CIERRE DEL DÍA
 ═══════════════════════════════════════════════════════ */
-
 window.ejecutarCierre = async function() {
   const todasVentas = await getVentasHoy();
-
-  // Solo ventas no anuladas para el cierre
   const ventas = todasVentas.filter(v => !v.anulada);
-
   if (ventas.length === 0) { alert('No hay ventas válidas registradas hoy.'); return; }
 
   const total         = ventas.reduce((s, v) => s + (v.total || 0), 0);
   const transacciones = ventas.length;
+  const desglose      = {};
 
-  const desglose = {};
   ventas.forEach(v => {
     (v.items || []).forEach(item => {
       const k = item.nombre_producto;
@@ -916,17 +965,14 @@ window.ejecutarCierre = async function() {
 
   const detalle    = Object.entries(desglose).map(([nombre, d]) => ({ nombre, ...d }));
   const ganancia   = detalle.reduce((s, d) => s + d.ganancia, 0);
-  const masVendido = detalle.sort((a, b) => b.vendido - a.vendido)[0]?.nombre || '—';
-
-  const hoy = fechaLocal();
+  const masVendido = [...detalle].sort((a, b) => b.vendido - a.vendido)[0]?.nombre || '—';
+  const hoy        = fechaLocal();
 
   await setDoc(doc(db(), 'cierres', hoy), {
-    fecha:             hoy,
-    total_ventas:      total,
+    fecha: hoy, total_ventas: total,
     num_transacciones: transacciones,
-    ganancia_total:    ganancia,
-    detalle,
-    creado:            serverTimestamp()
+    ganancia_total: ganancia, detalle,
+    creado: serverTimestamp()
   });
 
   $('cierre-resultado').style.display = 'block';
@@ -940,81 +986,60 @@ window.ejecutarCierre = async function() {
   const tbody = $('cierre-detalle-body');
   tbody.innerHTML = detalle.length === 0
     ? '<tr><td colspan="3" class="empty">Sin datos</td></tr>'
-    : detalle.map(d => `
-        <tr>
-          <td>${d.nombre}</td>
-          <td>${d.vendido}</td>
-          <td style="color:var(--green)">${fmtCOP(d.ganancia)}</td>
-        </tr>`).join('');
+    : detalle.map(d => `<tr><td>${d.nombre}</td><td>${d.vendido}</td><td style="color:var(--green)">${fmtCOP(d.ganancia)}</td></tr>`).join('');
 
   loadCierreHistorial();
 };
 
 async function loadCierreHistorial() {
-  const snap = await getDocs(
-    query(collection(db(), 'cierres'), orderBy('fecha', 'desc'))
-  );
+  const snap    = await getDocs(query(collection(db(), 'cierres'), orderBy('fecha', 'desc')));
   const cierres = snap.docs.map(d => d.data());
   const tbody   = $('cierre-historial-body');
-  if (cierres.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="4" class="empty">Sin cierres registrados</td></tr>';
-    return;
-  }
-  tbody.innerHTML = cierres.map(c => `
-    <tr>
-      <td>${c.fecha}</td>
-      <td style="color:var(--teal)">${fmtCOP(c.total_ventas)}</td>
-      <td>${c.num_transacciones}</td>
-      <td style="color:var(--green)">${fmtCOP(c.ganancia_total)}</td>
-    </tr>`).join('');
+  tbody.innerHTML = cierres.length === 0
+    ? '<tr><td colspan="4" class="empty">Sin cierres registrados</td></tr>'
+    : cierres.map(c => `
+        <tr>
+          <td>${c.fecha}</td>
+          <td style="color:var(--teal)">${fmtCOP(c.total_ventas)}</td>
+          <td>${c.num_transacciones}</td>
+          <td style="color:var(--green)">${fmtCOP(c.ganancia_total)}</td>
+        </tr>`).join('');
 }
 
 /* ═══════════════════════════════════════════════════════
    AJUSTES
 ═══════════════════════════════════════════════════════ */
-
 async function loadAjustes() {
-  const snap = await getDoc(doc(db(), 'ajustes', 'negocio'));
-  if (!snap.exists()) return;
-  const data = snap.data();
+  let data = _ajustesCache;
+  if (!data) {
+    const snap = await getDoc(doc(db(), 'ajustes', 'negocio'));
+    data = snap.exists() ? snap.data() : {};
+    _ajustesCache = data;
+  }
   $('aj-nombre').value    = data.nombre_negocio || '';
   $('aj-direccion').value = data.direccion || '';
   $('aj-telefono').value  = data.telefono  || '';
 }
 
 window.guardarAjustes = async function() {
-  await setDoc(doc(db(), 'ajustes', 'negocio'), {
+  const data = {
     nombre_negocio: $('aj-nombre').value.trim(),
     direccion:      $('aj-direccion').value.trim(),
     telefono:       $('aj-telefono').value.trim()
-  });
+  };
+  await setDoc(doc(db(), 'ajustes', 'negocio'), data);
+  _ajustesCache = data;
   showMsg('ajustes-msg', 'Ajustes guardados correctamente.', 'ok');
 };
 
 /* ═══════════════════════════════════════════════════════
-   MODALS
-═══════════════════════════════════════════════════════ */
-
-window.openModal  = function(id) { $(id).classList.add('open'); };
-window.closeModal = function(id) { $(id).classList.remove('open'); };
-
-document.querySelectorAll('.modal-overlay').forEach(overlay => {
-  overlay.addEventListener('click', function(e) {
-    if (e.target === this) this.classList.remove('open');
-  });
-});
-/* ═══════════════════════════════════════════════════════
    ANCHETAS
 ═══════════════════════════════════════════════════════ */
-
-let anchetas = [];
 let editandoAnchetaId = null;
-let itemsAncheta = []; // items del modal en edición
+let itemsAncheta      = [];
 
-// ── Cargar listado ────────────────────────────────────
 async function loadAnchetas() {
-  const snap = await getDocs(query(collection(db(), 'anchetas'), orderBy('nombre')));
-  anchetas = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  anchetas = await getAnchetas(true);   // forzar recarga solo al entrar al tab
   renderAnchetas();
 }
 
@@ -1036,7 +1061,6 @@ function renderAnchetas() {
     </tr>`).join('');
 }
 
-// ── Modal ancheta ─────────────────────────────────────
 window.openModalAncheta = function(id) {
   editandoAnchetaId = id || null;
   $('anch-modal-titulo').textContent = id ? 'Editar Ancheta' : 'Nueva Ancheta';
@@ -1045,8 +1069,8 @@ window.openModalAncheta = function(id) {
   if (id) {
     const a = anchetas.find(x => x.id === id);
     if (a) {
-      $('anch-nombre').value  = a.nombre;
-      $('anch-precio').value  = a.precio_venta;
+      $('anch-nombre').value = a.nombre;
+      $('anch-precio').value = a.precio_venta;
       itemsAncheta = [...(a.items || [])];
     }
   } else {
@@ -1060,42 +1084,35 @@ window.openModalAncheta = function(id) {
 
 function renderItemsAncheta() {
   const cont = $('anch-items-lista');
-  if (itemsAncheta.length === 0) {
-    cont.innerHTML = '<div class="empty" style="padding:12px">Sin productos aún</div>';
-  } else {
-    cont.innerHTML = itemsAncheta.map((it, i) => `
-      <div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)">
-        <span style="flex:1">${it.nombre_producto}</span>
-        <input type="number" min="1" value="${it.cantidad}" style="width:70px"
-          onchange="actualizarCantAncheta(${i}, this.value)"/>
-        <button class="btn-icon del" onclick="quitarItemAncheta(${i})">✕</button>
-      </div>`).join('');
-  }
+  cont.innerHTML = itemsAncheta.length === 0
+    ? '<div class="empty" style="padding:12px">Sin productos aún</div>'
+    : itemsAncheta.map((it, i) => `
+        <div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)">
+          <span style="flex:1">${it.nombre_producto}</span>
+          <input type="number" min="1" value="${it.cantidad}" style="width:70px"
+            onchange="actualizarCantAncheta(${i}, this.value)"/>
+          <button class="btn-icon del" onclick="quitarItemAncheta(${i})">✕</button>
+        </div>`).join('');
 }
 
 window.actualizarCantAncheta = function(i, val) {
   const v = parseFloat(val);
   if (v > 0) itemsAncheta[i].cantidad = v;
 };
-
-window.quitarItemAncheta = function(i) {
-  itemsAncheta.splice(i, 1);
-  renderItemsAncheta();
-};
+window.quitarItemAncheta = function(i) { itemsAncheta.splice(i, 1); renderItemsAncheta(); };
 
 window.buscarProductoAncheta = function() {
   const q    = $('anch-buscar').value.trim();
   const cont = $('anch-sugerencias');
   if (q.length < 1) { cont.innerHTML = ''; return; }
-  const filtrados = productos.filter(p =>
-    p.nombre.toLowerCase().includes(q.toLowerCase())
-  ).slice(0, 6);
-  if (filtrados.length === 0) { cont.innerHTML = '<div style="color:var(--muted);padding:8px">Sin resultados</div>'; return; }
-  cont.innerHTML = filtrados.map(p => `
-    <div class="sugerencia-item" onclick="agregarProductoAncheta('${p.id}','${p.nombre.replace(/'/g,"\\'")}')">
-      <span>${p.nombre}</span>
-      <span class="sug-stock">${p.stock} ${p.unidad}</span>
-    </div>`).join('');
+  const filtrados = productos.filter(p => p.nombre.toLowerCase().includes(q.toLowerCase())).slice(0, 6);
+  cont.innerHTML = filtrados.length === 0
+    ? '<div style="color:var(--muted);padding:8px">Sin resultados</div>'
+    : filtrados.map(p => `
+        <div class="sugerencia-item" onclick="agregarProductoAncheta('${p.id}','${p.nombre.replace(/'/g,"\\'")}')">
+          <span>${p.nombre}</span>
+          <span class="sug-stock">${p.stock} ${p.unidad}</span>
+        </div>`).join('');
 };
 
 window.agregarProductoAncheta = function(pid, nombre) {
@@ -1108,16 +1125,12 @@ window.agregarProductoAncheta = function(pid, nombre) {
 };
 
 window.guardarAncheta = async function() {
-  const nombre      = $('anch-nombre').value.trim();
+  const nombre       = $('anch-nombre').value.trim();
   const precio_venta = parseFloat($('anch-precio').value);
-  if (!nombre || isNaN(precio_venta)) {
-    showMsg('anch-msg', 'Nombre y precio son obligatorios.', 'error'); return;
-  }
-  if (itemsAncheta.length === 0) {
-    showMsg('anch-msg', 'Agrega al menos un producto.', 'error'); return;
-  }
-  const data = { nombre, precio_venta, items: itemsAncheta };
+  if (!nombre || isNaN(precio_venta)) { showMsg('anch-msg', 'Nombre y precio son obligatorios.', 'error'); return; }
+  if (itemsAncheta.length === 0)      { showMsg('anch-msg', 'Agrega al menos un producto.', 'error'); return; }
 
+  const data = { nombre, precio_venta, items: itemsAncheta };
   if (editandoAnchetaId) {
     await updateDoc(doc(db(), 'anchetas', editandoAnchetaId), data);
     showMsg('anch-list-msg', 'Ancheta actualizada.', 'ok');
@@ -1126,39 +1139,46 @@ window.guardarAncheta = async function() {
     await addDoc(collection(db(), 'anchetas'), data);
     showMsg('anch-list-msg', 'Ancheta creada.', 'ok');
   }
+  invalidarAnchetas();
+  anchetas = await getAnchetas(true);
   closeModal('modal-ancheta');
-  loadAnchetas();
+  renderAnchetas();
 };
 
 window.eliminarAncheta = async function(id) {
   if (!confirm('¿Eliminar esta ancheta?')) return;
   await deleteDoc(doc(db(), 'anchetas', id));
+  invalidarAnchetas();
+  anchetas = anchetas.filter(a => a.id !== id);
+  if (_anchetasCache) _anchetasCache = _anchetasCache.filter(a => a.id !== id);
   showMsg('anch-list-msg', 'Ancheta eliminada.', 'warn');
-  loadAnchetas();
+  renderAnchetas();
 };
 
-// ── Buscar ancheta desde ventas ───────────────────────
-// Se llama desde buscarProductoVenta — ya integrado abajo
-async function getAnchetas() {
-  if (anchetas.length > 0) return anchetas;
-  const snap = await getDocs(query(collection(db(), 'anchetas'), orderBy('nombre')));
-  anchetas = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-  return anchetas;
-}
+/* ═══════════════════════════════════════════════════════
+   MODALS
+═══════════════════════════════════════════════════════ */
+window.openModal  = function(id) { $(id).classList.add('open'); };
+window.closeModal = function(id) { $(id).classList.remove('open'); };
+
+document.querySelectorAll('.modal-overlay').forEach(overlay => {
+  overlay.addEventListener('click', function(e) {
+    if (e.target === this) this.classList.remove('open');
+  });
+});
 
 /* ═══════════════════════════════════════════════════════
-   INIT  — llamado desde index.html tras autenticación
+   INIT  — UNA sola carga de productos y anchetas
 ═══════════════════════════════════════════════════════ */
-
-
 window.initApp = async function() {
   const hoy = new Date().toISOString().split('T')[0];
   $('inf-desde').value = hoy;
   $('inf-hasta').value = hoy;
 
-  productos = await getProductos();
-  anchetas = await getAnchetas();
+  // Carga paralela única al arrancar
+  [productos, anchetas] = await Promise.all([getProductos(), getAnchetas()]);
 
+  // Dashboard usa los mismos datos + ventas hoy (query fresca)
   loadDashboard();
   renderCarrito();
 };
