@@ -800,6 +800,7 @@ window.imprimirFactura = async function(ventaId) {
     </style>
   </head><body>
     <h2>${aj.nombre_negocio || 'Miscelánea'}</h2>
+    ${aj.nit ? `<p>NIT: ${aj.nit}</p>` : ''}
     <p>${aj.direccion || ''}</p>
     <p>${aj.telefono  || ''}</p>
     <hr/>
@@ -1030,6 +1031,7 @@ async function loadAjustes() {
     _ajustesCache = data;
   }
   $('aj-nombre').value    = data.nombre_negocio || '';
+  $('aj-nit').value       = data.nit || '';
   $('aj-direccion').value = data.direccion || '';
   $('aj-telefono').value  = data.telefono  || '';
 }
@@ -1037,6 +1039,7 @@ async function loadAjustes() {
 window.guardarAjustes = async function() {
   const data = {
     nombre_negocio: $('aj-nombre').value.trim(),
+    nit:            $('aj-nit').value.trim(),
     direccion:      $('aj-direccion').value.trim(),
     telefono:       $('aj-telefono').value.trim()
   };
@@ -1412,7 +1415,7 @@ window.imprimirEtiquetasCodigo = function() {
 
   const sheet = $('cod-print-sheet');
   sheet.innerHTML = etiquetasCodigo.map((item, i) => etiquetaCodigoHtml(item, i, 'print')).join('');
-  etiquetasCodigo.forEach((item, i) => renderSvgCodigo(`cod-print-svg-${i}`, item.codigo, { width: 1.3, height: 44, margin: 3 }));
+  etiquetasCodigo.forEach((item, i) => renderSvgCodigo(`cod-print-svg-${i}`, item.codigo, { width: 0.9, height: 32, margin: 1 }));
 
   document.body.classList.add('print-barcodes');
   setTimeout(() => window.print(), 120);
