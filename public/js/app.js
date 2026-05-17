@@ -386,10 +386,16 @@ async function loadDashboard() {
   productos = prods;
 
   const alertas = prods.filter(p => p.stock <= p.stock_minimo);
+  const valorInventario = prods.reduce((sum, p) => {
+    const stock = parseFloat(p.stock) || 0;
+    const precioVenta = parseFloat(p.precio_venta) || 0;
+    return sum + (stock * precioVenta);
+  }, 0);
 
   $('d-productos').textContent  = prods.length;
   $('d-ventas-hoy').textContent = resumenHoy.num_ventas || 0;
   $('d-total-hoy').textContent  = fmtCOP(resumenHoy.total_ventas || 0);
+  $('d-valor-inventario').textContent = fmtCOP(valorInventario);
   $('d-alertas').textContent    = alertas.length;
 
   const card = $('d-alertas-card');
