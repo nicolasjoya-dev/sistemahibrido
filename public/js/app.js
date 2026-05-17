@@ -2,7 +2,7 @@
    SistemaHíbrido — app.js  (Firestore optimizado)
    - Caché local para productos y anchetas
    - Inventario virtual con búsqueda local (no re-lee Firestore)
-   - onSnapshot eliminado (era el mayor consumidor)
+   - onSnapshot masivo eliminado (era el mayor consumidor)
    - Anulación de ventas de anchetas corregida
    - Inventario paginado para soportar 2000+ productos
    ════════════════════════════════════════════════════ */
@@ -10,7 +10,7 @@
 import {
   collection, doc, getDocs, getDoc, addDoc, setDoc,
   updateDoc, deleteDoc, query, where, orderBy,
-  serverTimestamp, limit, runTransaction, writeBatch, increment
+  serverTimestamp, limit, runTransaction, writeBatch, increment, onSnapshot
 } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
 
 function db() { return window.__db; }
@@ -56,6 +56,8 @@ const _resumenDiaCache = new Map();
 const _resumenMesCache = new Map();
 let _cierresCache = null;
 let _cierresCargadoEn = 0;
+let _dashboardResumenUnsub = null;
+let _dashboardResumenFecha = null;
 
 async function getProductos(forzar = false) {
   const ahora = Date.now();
@@ -112,6 +114,29 @@ function fechaVenta(v) {
   return v.fecha_key || fechaLocal(tsToDate(v.fecha));
 }
 
+function costoItems(items) {
+  return (items || []).reduce((s, item) => {
+    const cantidad = parseFloat(item.cantidad) || 0;
+    const compra = parseFloat(item.precio_compra) || 0;
+    return s + (cantidad * compra);
+  }, 0);
+}
+
+function costoAncheta(a) {
+  return (a.items || []).reduce((s, sub) => {
+    const producto = productos.find(p => p.id === sub.producto_id);
+    const cantidad = parseFloat(sub.cantidad) || 0;
+    const compra = parseFloat(producto?.precio_compra) || 0;
+    return s + (cantidad * compra);
+  }, 0);
+}
+
+function gananciaVenta(v) {
+  if (typeof v.ganancia_total === 'number') return v.ganancia_total;
+  const total = parseFloat(v.total) || 0;
+  return total - costoItems(v.items);
+}
+
 function resumenDesdeVentas(fecha, ventas) {
   const validas = (ventas || []).filter(v => !v.anulada);
   const anuladas = (ventas || []).filter(v => v.anulada);
@@ -119,6 +144,7 @@ function resumenDesdeVentas(fecha, ventas) {
     fecha,
     num_ventas: validas.length,
     total_ventas: validas.reduce((s, v) => s + (v.total || 0), 0),
+    ganancia_total: validas.reduce((s, v) => s + gananciaVenta(v), 0),
     ventas_anuladas: anuladas.length,
     total_anulado: anuladas.reduce((s, v) => s + (v.total || 0), 0)
   };
@@ -216,6 +242,7 @@ window.switchTab = function(name, el) {
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
   $('tab-' + name).classList.add('active');
   if (el) el.classList.add('active');
+  if (name !== 'dashboard') detenerEscuchaResumenDashboard();
   // Solo carga desde Firestore en primera visita o tabs que siempre necesitan datos frescos
   if (name === 'dashboard')  loadDashboard();
   if (name === 'inventario') renderInventarioPaginado();   // usa caché
@@ -295,7 +322,12 @@ async function asegurarResumenDia(fecha) {
   const ref = doc(db(), 'resumenes_diarios', fecha);
   try {
     const snap = await getDoc(ref);
-    if (snap.exists()) return guardarCache(_resumenDiaCache, fecha, { fecha, ...snap.data() });
+    if (snap.exists()) {
+      const data = { fecha, ...snap.data() };
+      if (typeof data.ganancia_total === 'number') {
+        return guardarCache(_resumenDiaCache, fecha, data);
+      }
+    }
   } catch (e) {
     console.warn('No se pudo leer resumen diario:', e.message || e);
   }
@@ -310,12 +342,13 @@ async function asegurarResumenDia(fecha) {
   return guardarCache(_resumenDiaCache, fecha, resumen);
 }
 
-async function ajustarResumenDia(fecha, { totalDelta = 0, countDelta = 0, totalAnuladoDelta = 0, anuladasDelta = 0 }) {
+async function ajustarResumenDia(fecha, { totalDelta = 0, countDelta = 0, gananciaDelta = 0, totalAnuladoDelta = 0, anuladasDelta = 0 }) {
   try {
     await setDoc(doc(db(), 'resumenes_diarios', fecha), {
       fecha,
       total_ventas: increment(totalDelta),
       num_ventas: increment(countDelta),
+      ganancia_total: increment(gananciaDelta),
       total_anulado: increment(totalAnuladoDelta),
       ventas_anuladas: increment(anuladasDelta),
       actualizado: serverTimestamp()
@@ -372,6 +405,31 @@ async function getResumenesMes(anio, mes) {
 /* ═══════════════════════════════════════════════════════
    DASHBOARD  — una sola llamada paralela
 ═══════════════════════════════════════════════════════ */
+function pintarResumenDashboard(resumenHoy = {}) {
+  if (!$('d-ventas-hoy')) return;
+  $('d-ventas-hoy').textContent = resumenHoy.num_ventas || 0;
+  $('d-total-hoy').textContent  = fmtCOP(resumenHoy.total_ventas || 0);
+  $('d-ganancia-hoy').textContent = fmtCOP(resumenHoy.ganancia_total || 0);
+}
+
+function detenerEscuchaResumenDashboard() {
+  if (_dashboardResumenUnsub) _dashboardResumenUnsub();
+  _dashboardResumenUnsub = null;
+  _dashboardResumenFecha = null;
+}
+
+function escucharResumenDashboard(fecha) {
+  if (_dashboardResumenUnsub && _dashboardResumenFecha === fecha) return;
+  detenerEscuchaResumenDashboard();
+  _dashboardResumenFecha = fecha;
+  _dashboardResumenUnsub = onSnapshot(doc(db(), 'resumenes_diarios', fecha), snap => {
+    if (!snap.exists()) return;
+    const resumen = { fecha, ...snap.data() };
+    guardarCache(_resumenDiaCache, fecha, resumen);
+    pintarResumenDashboard(resumen);
+  }, e => console.warn('No se pudo escuchar resumen diario:', e.message || e));
+}
+
 async function loadDashboard() {
   const hoy = new Date();
   $('fecha-hoy').textContent = hoy.toLocaleDateString('es-CO', { weekday:'long', year:'numeric', month:'long', day:'numeric' });
@@ -393,8 +451,8 @@ async function loadDashboard() {
   }, 0);
 
   $('d-productos').textContent  = prods.length;
-  $('d-ventas-hoy').textContent = resumenHoy.num_ventas || 0;
-  $('d-total-hoy').textContent  = fmtCOP(resumenHoy.total_ventas || 0);
+  pintarResumenDashboard(resumenHoy);
+  escucharResumenDashboard(fechaHoy);
   $('d-valor-inventario').textContent = fmtCOP(valorInventario);
   $('d-alertas').textContent    = alertas.length;
 
@@ -457,6 +515,7 @@ window.anularVenta = async function(ventaId) {
   const v = ventaSnap.data();
   if (v.anulada) { alert('Esta venta ya fue anulada.'); return; }
   const fechaKey = fechaVenta(v);
+  const ganancia = gananciaVenta(v);
   await asegurarResumenDia(fechaKey);
 
   const reposiciones = stockNecesarioDesdeItems(v.items || []);
@@ -497,6 +556,7 @@ window.anularVenta = async function(ventaId) {
   await ajustarResumenDia(fechaKey, {
     totalDelta: -(v.total || 0),
     countDelta: -1,
+    gananciaDelta: -ganancia,
     totalAnuladoDelta: v.total || 0,
     anuladasDelta: 1
   });
@@ -845,8 +905,12 @@ window.confirmarAgregarCarrito = function() {
 
   if (anchetaParaCarrito) {
     const a = anchetaParaCarrito;
+    const costoUnitario = costoAncheta(a);
     const existing = carrito.find(c => c._ancheta_id === a.id);
-    if (existing) { existing.cantidad += cant; }
+    if (existing) {
+      existing.cantidad += cant;
+      existing.precio_compra = costoUnitario;
+    }
     else {
       carrito.push({
         _ancheta_id:     a.id,
@@ -855,7 +919,7 @@ window.confirmarAgregarCarrito = function() {
         nombre_producto: '🎁 ' + a.nombre,
         cantidad:        cant,
         precio_unitario: a.precio_venta,
-        precio_compra:   0,
+        precio_compra:   costoUnitario,
         unidad:          'unidades'
       });
     }
@@ -975,6 +1039,7 @@ window.confirmarVenta = async function() {
   const tipo     = $('cart-desc-tipo').value;
   const desc     = tipo === 'pct' ? (sub * descVal / 100) : descVal;
   const total    = Math.max(0, sub - desc);
+  const ganancia = total - costoItems(carrito);
   const efectivo = parseFloat($('cart-efectivo').value) || null;
   const medio_pago = document.querySelector('input[name="medio_pago"]:checked')?.value || 'efectivo';
   const ahora    = new Date();
@@ -989,6 +1054,7 @@ window.confirmarVenta = async function() {
     subtotal:          sub,
     descuento:         desc,
     total,
+    ganancia_total:    ganancia,
     medio_pago,
     efectivo:          efectivo || 0,
     vuelto:            efectivo ? efectivo - total : 0,
@@ -1034,7 +1100,7 @@ window.confirmarVenta = async function() {
     productos = _productosCache;
   }
   invalidarVentasCache(fechaKey);
-  await ajustarResumenDia(fechaKey, { totalDelta: total, countDelta: 1 });
+  await ajustarResumenDia(fechaKey, { totalDelta: total, countDelta: 1, gananciaDelta: ganancia });
 
   showMsg('venta-msg', `Venta registrada. Total: ${fmtCOP(total)}`, 'ok');
   if (confirm('Venta registrada. Â¿Descargar factura PDF?')) {
