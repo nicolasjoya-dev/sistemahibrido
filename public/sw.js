@@ -1,9 +1,10 @@
-const CACHE_NAME = 'sistemahibrido-v3';
+const CACHE_NAME = 'sistemahibrido-v4';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
   '/css/style.css',
   '/js/app.js',
+  '/vendor/JsBarcode.all.min.js',
   '/manifest.json',
   'https://fonts.googleapis.com/css2?family=Syne:wght@400;700;800&family=DM+Sans:wght@400;500;600&display=swap'
 ];

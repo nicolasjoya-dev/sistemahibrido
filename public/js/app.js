@@ -81,6 +81,8 @@ let editandoProductoId  = null;
 let entradaProductoId   = null;
 let productoParaCarrito = null;
 let anchetaParaCarrito  = null;
+let codigoProductoId    = null;
+let etiquetasCodigo     = [];
 let calAnio = new Date().getFullYear();
 let calMes  = new Date().getMonth() + 1;
 
@@ -112,6 +114,7 @@ window.switchTab = function(name, el) {
   if (name === 'cierre')     loadCierreHistorial();
   if (name === 'ajustes')    loadAjustes();
   if (name === 'anchetas')   renderAnchetas();             // usa caché
+  if (name === 'codigos')    renderCodigosBarras();
 };
 
 // ── Messages ──────────────────────────────────────────
@@ -120,6 +123,16 @@ function showMsg(elId, text, type = 'ok') {
   if (!el) return;
   el.innerHTML = `<div class="msg ${type}">${text}</div>`;
   setTimeout(() => { el.innerHTML = ''; }, 3500);
+}
+
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, ch => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[ch]));
+}
+
+function escapeJsString(value) {
+  return String(value ?? '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 }
 
 /* ═══════════════════════════════════════════════════════
@@ -1154,6 +1167,260 @@ window.eliminarAncheta = async function(id) {
   showMsg('anch-list-msg', 'Ancheta eliminada.', 'warn');
   renderAnchetas();
 };
+
+/* ═══════════════════════════════════════════════════════
+   CÓDIGOS DE BARRAS
+═══════════════════════════════════════════════════════ */
+function productoCodigoSeleccionado() {
+  return productos.find(p => p.id === codigoProductoId) || null;
+}
+
+function limpiarCodigo(value) {
+  return String(value || '').trim().toUpperCase().replace(/[^A-Z0-9._-]/g, '');
+}
+
+function productoConCodigo(codigo, exceptoId = null) {
+  const buscado = limpiarCodigo(codigo);
+  if (!buscado) return null;
+  return productos.find(p => limpiarCodigo(p.codigo_barras) === buscado && p.id !== exceptoId) || null;
+}
+
+function codigoProductoActual(p) {
+  return limpiarCodigo(p?.codigo_barras || '');
+}
+
+function crearCodigoUnico() {
+  let codigo = '';
+  do {
+    const tiempo = Date.now().toString(36).toUpperCase();
+    const azar = Math.random().toString(36).slice(2, 5).toUpperCase().padEnd(3, '0');
+    codigo = `SH${tiempo}${azar}`;
+  } while (productoConCodigo(codigo));
+  return codigo;
+}
+
+function actualizarCodigoLocal(productoId, codigo) {
+  const aplicar = lista => {
+    const idx = lista?.findIndex(p => p.id === productoId);
+    if (idx !== undefined && idx >= 0) lista[idx] = { ...lista[idx], codigo_barras: codigo };
+  };
+  aplicar(productos);
+  aplicar(_productosCache);
+}
+
+function renderSvgCodigo(svgId, codigo, opciones = {}) {
+  const svg = $(svgId);
+  if (!svg) return;
+  svg.innerHTML = '';
+  if (!codigo) return;
+
+  if (!window.JsBarcode) {
+    svg.classList.add('barcode-error');
+    return;
+  }
+
+  try {
+    window.JsBarcode(svg, codigo, {
+      format: 'CODE128',
+      displayValue: false,
+      lineColor: '#0e0f11',
+      background: '#ffffff',
+      width: opciones.width || 2,
+      height: opciones.height || 72,
+      margin: opciones.margin ?? 8
+    });
+    svg.classList.remove('barcode-error');
+  } catch (e) {
+    svg.innerHTML = '';
+    svg.classList.add('barcode-error');
+  }
+}
+
+function renderCodigosBarras() {
+  const p = productoCodigoSeleccionado();
+  if ($('cod-producto-nombre')) $('cod-producto-nombre').value = p ? p.nombre : '';
+  if ($('cod-valor') && p && !$('cod-valor').value) $('cod-valor').value = codigoProductoActual(p);
+  actualizarPreviewCodigo();
+  renderEtiquetasCodigo();
+}
+
+window.filtrarProductosCodigo = function() {
+  const input = $('cod-search');
+  const cont = $('cod-sugerencias');
+  if (!input || !cont) return;
+
+  const q = input.value.trim().toLowerCase();
+  if (q.length < 1) { cont.innerHTML = ''; return; }
+
+  const encontrados = productos
+    .filter(p =>
+      p.nombre.toLowerCase().includes(q) ||
+      (p.categoria || '').toLowerCase().includes(q) ||
+      (p.codigo_barras || '').toLowerCase().includes(q))
+    .slice(0, 8);
+
+  cont.innerHTML = encontrados.length === 0
+    ? '<div class="empty barcode-empty">Sin productos</div>'
+    : `<div class="sugerencias-list">${encontrados.map(p => {
+        const codigo = codigoProductoActual(p) || 'Sin código';
+        return `<div class="sugerencia-item" onclick="seleccionarProductoCodigo('${escapeJsString(p.id)}')">
+          <span>${escapeHtml(p.nombre)}</span>
+          <span class="sug-stock">${escapeHtml(codigo)}</span>
+        </div>`;
+      }).join('')}</div>`;
+};
+
+window.seleccionarProductoCodigo = function(id) {
+  codigoProductoId = id;
+  const p = productoCodigoSeleccionado();
+  $('cod-search').value = '';
+  $('cod-sugerencias').innerHTML = '';
+  $('cod-producto-nombre').value = p ? p.nombre : '';
+  $('cod-valor').value = codigoProductoActual(p);
+  actualizarPreviewCodigo();
+};
+
+window.actualizarPreviewCodigo = function() {
+  const input = $('cod-valor');
+  const codigo = limpiarCodigo(input?.value || '');
+  if (input && input.value !== codigo) input.value = codigo;
+
+  const p = productoCodigoSeleccionado();
+  const nombre = p ? p.nombre : 'Sin producto';
+  if ($('cod-preview-name')) $('cod-preview-name').textContent = nombre;
+  if ($('cod-preview-value')) $('cod-preview-value').textContent = codigo || '---';
+  renderSvgCodigo('cod-preview-svg', codigo);
+};
+
+window.generarCodigoProducto = function() {
+  if (!codigoProductoId) {
+    showMsg('cod-msg', 'Selecciona un producto antes de generar el código.', 'error');
+    return;
+  }
+  $('cod-valor').value = crearCodigoUnico();
+  actualizarPreviewCodigo();
+  showMsg('cod-msg', 'Código generado. Guárdalo en el producto antes de imprimir.', 'ok');
+};
+
+window.guardarCodigoProducto = async function() {
+  const p = productoCodigoSeleccionado();
+  if (!p) {
+    showMsg('cod-msg', 'Selecciona un producto para guardar el código.', 'error');
+    return;
+  }
+
+  const codigo = limpiarCodigo($('cod-valor').value);
+  if (!codigo) {
+    showMsg('cod-msg', 'Escribe o genera un código válido.', 'error');
+    return;
+  }
+
+  const repetido = productoConCodigo(codigo, p.id);
+  if (repetido) {
+    showMsg('cod-msg', `Ese código ya está en ${repetido.nombre}.`, 'error');
+    return;
+  }
+
+  await updateDoc(doc(db(), 'productos', p.id), { codigo_barras: codigo });
+  actualizarCodigoLocal(p.id, codigo);
+  showMsg('cod-msg', 'Código guardado en el producto.', 'ok');
+  actualizarPreviewCodigo();
+};
+
+window.agregarEtiquetaCodigo = function() {
+  const p = productoCodigoSeleccionado();
+  if (!p) {
+    showMsg('cod-msg', 'Selecciona un producto para añadir etiquetas.', 'error');
+    return;
+  }
+
+  const codigo = limpiarCodigo($('cod-valor').value);
+  if (!codigo) {
+    showMsg('cod-msg', 'Escribe o genera un código válido.', 'error');
+    return;
+  }
+
+  if (productoConCodigo(codigo, p.id)) {
+    showMsg('cod-msg', 'Ese código ya está asignado a otro producto.', 'error');
+    return;
+  }
+
+  if (codigoProductoActual(p) !== codigo) {
+    showMsg('cod-msg', 'Guarda el código en el producto antes de añadir etiquetas.', 'warn');
+    return;
+  }
+
+  const cantidad = Math.max(1, Math.min(100, parseInt($('cod-cantidad').value, 10) || 1));
+  for (let i = 0; i < cantidad; i++) {
+    etiquetasCodigo.push({
+      producto_id: p.id,
+      nombre: p.nombre,
+      codigo,
+      precio_venta: p.precio_venta || 0
+    });
+  }
+  renderEtiquetasCodigo();
+  showMsg('cod-msg', `${cantidad} etiqueta${cantidad > 1 ? 's' : ''} añadida${cantidad > 1 ? 's' : ''}.`, 'ok');
+};
+
+function etiquetaCodigoHtml(item, i, modo = 'lista') {
+  const svgId = modo === 'print' ? `cod-print-svg-${i}` : `cod-label-svg-${i}`;
+  const quitar = modo === 'print' ? '' : `<button class="btn-icon del" onclick="quitarEtiquetaCodigo(${i})">Quitar</button>`;
+  return `<div class="barcode-label-card">
+    <div class="barcode-label-top">
+      <strong>${escapeHtml(item.nombre)}</strong>
+      ${quitar}
+    </div>
+    <svg id="${svgId}" class="barcode-svg small" role="img" aria-label="Código de barras ${escapeHtml(item.codigo)}"></svg>
+    <div class="barcode-label-bottom">
+      <span>${escapeHtml(item.codigo)}</span>
+      <span>${fmtCOP(item.precio_venta)}</span>
+    </div>
+  </div>`;
+}
+
+function renderEtiquetasCodigo() {
+  const cont = $('cod-etiquetas-lista');
+  if (!cont) return;
+
+  if (etiquetasCodigo.length === 0) {
+    cont.innerHTML = '<div class="empty">Sin etiquetas listas</div>';
+    return;
+  }
+
+  cont.innerHTML = etiquetasCodigo.map((item, i) => etiquetaCodigoHtml(item, i)).join('');
+  etiquetasCodigo.forEach((item, i) => renderSvgCodigo(`cod-label-svg-${i}`, item.codigo, { width: 1.5, height: 48, margin: 4 }));
+}
+
+window.quitarEtiquetaCodigo = function(i) {
+  etiquetasCodigo.splice(i, 1);
+  renderEtiquetasCodigo();
+};
+
+window.limpiarEtiquetasCodigo = function() {
+  etiquetasCodigo = [];
+  renderEtiquetasCodigo();
+  const sheet = $('cod-print-sheet');
+  if (sheet) sheet.innerHTML = '';
+};
+
+window.imprimirEtiquetasCodigo = function() {
+  if (etiquetasCodigo.length === 0) {
+    showMsg('cod-msg', 'Añade al menos una etiqueta antes de imprimir.', 'error');
+    return;
+  }
+
+  const sheet = $('cod-print-sheet');
+  sheet.innerHTML = etiquetasCodigo.map((item, i) => etiquetaCodigoHtml(item, i, 'print')).join('');
+  etiquetasCodigo.forEach((item, i) => renderSvgCodigo(`cod-print-svg-${i}`, item.codigo, { width: 1.3, height: 44, margin: 3 }));
+
+  document.body.classList.add('print-barcodes');
+  setTimeout(() => window.print(), 120);
+};
+
+window.addEventListener('afterprint', () => {
+  document.body.classList.remove('print-barcodes');
+});
 
 /* ═══════════════════════════════════════════════════════
    MODALS

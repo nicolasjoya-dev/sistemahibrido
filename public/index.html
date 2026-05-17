@@ -183,6 +183,9 @@
     <a class="nav-item" data-tab="anchetas" onclick="switchTab('anchetas',this)">
       <span class="nav-icon">🎁</span><span>Anchetas</span>
     </a>
+    <a class="nav-item" data-tab="codigos" onclick="switchTab('codigos',this)">
+      <span class="nav-icon">▥</span><span>Códigos</span>
+    </a>
     <a class="nav-item" data-tab="ventas" onclick="switchTab('ventas',this)">
       <span class="nav-icon">◎</span><span>Nueva Venta</span>
     </a>
@@ -261,6 +264,64 @@
         <tbody id="anch-body"></tbody>
       </table>
     </div>
+  </div>
+
+  <!-- ── CÓDIGOS DE BARRAS ── -->
+  <div id="tab-codigos" class="tab">
+    <div class="page-header">
+      <div><h1>Códigos de Barras</h1><p class="page-sub">Etiquetas internas para productos</p></div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap">
+        <button class="btn-secondary" onclick="limpiarEtiquetasCodigo()">Limpiar</button>
+        <button class="btn-primary" onclick="imprimirEtiquetasCodigo()">Imprimir etiquetas</button>
+      </div>
+    </div>
+    <div id="cod-msg"></div>
+    <div class="barcode-workspace">
+      <div class="panel barcode-editor">
+        <div class="panel-title">Crear código</div>
+        <div class="barcode-form">
+          <div class="form-group">
+            <label>Producto</label>
+            <input type="text" id="cod-search" placeholder="Buscar producto..." oninput="filtrarProductosCodigo()" autocomplete="off"/>
+            <div id="cod-sugerencias" class="barcode-suggestions"></div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>Producto seleccionado</label>
+              <input type="text" id="cod-producto-nombre" class="readonly-field" readonly placeholder="Sin seleccionar"/>
+            </div>
+            <div class="form-group">
+              <label>Cantidad etiquetas</label>
+              <input type="number" id="cod-cantidad" min="1" max="100" value="1"/>
+            </div>
+          </div>
+          <div class="form-group">
+            <label>Código</label>
+            <input type="text" id="cod-valor" placeholder="Código interno" oninput="actualizarPreviewCodigo()" autocomplete="off"/>
+          </div>
+          <div class="barcode-actions">
+            <button class="btn-secondary" onclick="generarCodigoProducto()">Generar</button>
+            <button class="btn-secondary" onclick="guardarCodigoProducto()">Guardar en producto</button>
+            <button class="btn-primary" onclick="agregarEtiquetaCodigo()">Añadir a etiquetas</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel barcode-preview-panel">
+        <div class="panel-title">Vista previa</div>
+        <div class="barcode-preview-card">
+          <div id="cod-preview-name" class="barcode-label-name">Sin producto</div>
+          <svg id="cod-preview-svg" class="barcode-svg" role="img" aria-label="Código de barras"></svg>
+          <div id="cod-preview-value" class="barcode-label-code">---</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">Etiquetas listas</div>
+      <div id="cod-etiquetas-lista" class="barcode-label-list"></div>
+    </div>
+    <div id="cod-print-sheet" class="barcode-print-sheet"></div>
   </div>
 
   <!-- ── VENTAS / CARRITO ── -->
@@ -607,6 +668,7 @@
 
 </div><!-- /#app-screen -->
 
+<script src="/vendor/JsBarcode.all.min.js"></script>
 <script type="module" src="/js/app.js"></script>
 <script>
   if ('serviceWorker' in navigator) {

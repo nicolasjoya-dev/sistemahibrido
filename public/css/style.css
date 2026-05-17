@@ -450,6 +450,101 @@ input:focus, select:focus {
 /* ── Empty state ─────────────────────────────────────────────── */
 .empty { text-align: center; padding: 48px; color: var(--muted); font-size: 0.9rem; }
 
+/* Codigos de barras */
+.barcode-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(300px, 0.9fr);
+  gap: 20px;
+  align-items: start;
+}
+.barcode-form { padding: 22px; }
+.barcode-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.barcode-suggestions { position: relative; }
+.barcode-empty {
+  padding: 14px;
+  text-align: left;
+}
+.barcode-preview-card {
+  margin: 22px;
+  background: #ffffff;
+  color: #0e0f11;
+  border-radius: 8px;
+  padding: 20px;
+  min-height: 210px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 12px;
+  box-shadow: inset 0 0 0 1px #d9dde5;
+}
+.barcode-label-name {
+  font-family: var(--font-head);
+  font-size: 1rem;
+  font-weight: 800;
+  line-height: 1.2;
+  color: #0e0f11;
+  word-break: break-word;
+}
+.barcode-label-code {
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: #30343b;
+}
+.barcode-svg {
+  width: 100%;
+  min-height: 86px;
+  background: #ffffff;
+  display: block;
+}
+.barcode-svg.small { min-height: 54px; }
+.barcode-error { border: 1px dashed var(--red); }
+.barcode-label-list {
+  padding: 18px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 14px;
+}
+.barcode-label-card {
+  background: #ffffff;
+  color: #0e0f11;
+  border-radius: 8px;
+  border: 1px solid #d9dde5;
+  padding: 12px;
+  min-height: 150px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.barcode-label-top,
+.barcode-label-bottom {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.barcode-label-top strong {
+  font-size: 0.88rem;
+  line-height: 1.2;
+  word-break: break-word;
+}
+.barcode-label-bottom {
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #30343b;
+}
+.barcode-label-card .btn-icon {
+  color: #606775;
+  border-color: #d0d5dd;
+  flex-shrink: 0;
+}
+.barcode-print-sheet { display: none; }
+
 /* ── Responsive ──────────────────────────────────────────────── */
 @media (max-width: 768px) {
   .sidebar { width: 60px; }
@@ -457,8 +552,55 @@ input:focus, select:focus {
   .main { margin-left: 60px; padding: 24px 18px; }
   .stats-grid { grid-template-columns: 1fr 1fr; }
   #tab-ventas > div[style*="grid"] { display: block; }
+  .barcode-workspace { grid-template-columns: 1fr; }
+  .barcode-actions .btn-primary,
+  .barcode-actions .btn-secondary { flex: 1 1 160px; }
 }
 /* Fix: sugerencias de venta no se corten */
 #tab-ventas .panel {
   overflow: visible;
+}
+
+@media print {
+  body.print-barcodes {
+    background: #ffffff;
+    color: #000000;
+    display: block;
+    min-height: auto;
+  }
+  body.print-barcodes .sidebar,
+  body.print-barcodes .main > .tab:not(#tab-codigos),
+  body.print-barcodes #tab-codigos > :not(.barcode-print-sheet) {
+    display: none !important;
+  }
+  body.print-barcodes .main {
+    margin: 0;
+    padding: 0;
+    max-width: none;
+    width: 100%;
+  }
+  body.print-barcodes #tab-codigos {
+    display: block !important;
+  }
+  body.print-barcodes .barcode-print-sheet {
+    display: grid;
+    grid-template-columns: repeat(3, 64mm);
+    gap: 4mm;
+    padding: 6mm;
+    background: #ffffff;
+  }
+  body.print-barcodes .barcode-label-card {
+    width: 64mm;
+    min-height: 34mm;
+    border: 1px solid #111111;
+    box-shadow: none;
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  body.print-barcodes .barcode-svg.small {
+    min-height: 16mm;
+  }
+  body.print-barcodes .barcode-label-card .btn-icon {
+    display: none;
+  }
 }
