@@ -10,7 +10,7 @@
 import {
   collection, doc, getDocs, getDoc, addDoc, setDoc,
   updateDoc, deleteDoc, query, where, orderBy,
-  serverTimestamp, limit, startAfter
+  serverTimestamp, limit, runTransaction, writeBatch, increment
 } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
 
 function db() { return window.__db; }
@@ -47,6 +47,15 @@ let _ajustesCache    = null;
 // Timestamp de última carga para invalidar si llevan +30 min
 let _productosCargadoEn = 0;
 const CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutos
+const VENTAS_CACHE_TTL_MS = 5 * 60 * 1000; // evita re-leer al navegar entre tabs
+const DASH_VENTAS_LIMIT = 20;
+const _ventasFechaCache = new Map();
+const _ventasRangoCache = new Map();
+const _ventasRecientesCache = new Map();
+const _resumenDiaCache = new Map();
+const _resumenMesCache = new Map();
+let _cierresCache = null;
+let _cierresCargadoEn = 0;
 
 async function getProductos(forzar = false) {
   const ahora = Date.now();
@@ -72,6 +81,106 @@ function invalidarProductos() {
   _productosCargadoEn = 0;
 }
 function invalidarAnchetas() { _anchetasCache = null; }
+
+function cacheVigente(entry, ttl = VENTAS_CACHE_TTL_MS) {
+  return entry && (Date.now() - entry.cargadoEn) < ttl;
+}
+
+function guardarCache(map, key, data) {
+  map.set(key, { cargadoEn: Date.now(), data });
+  return data;
+}
+
+function rangoKey(desde, hasta) {
+  return `${desde}|${hasta}`;
+}
+
+function mesKey(anio, mes) {
+  return `${anio}-${String(mes).padStart(2, '0')}`;
+}
+
+function rangoMes(anio, mes) {
+  const ultimo = new Date(anio, mes, 0).getDate();
+  const mm = String(mes).padStart(2, '0');
+  return {
+    desde: `${anio}-${mm}-01`,
+    hasta: `${anio}-${mm}-${String(ultimo).padStart(2, '0')}`
+  };
+}
+
+function fechaVenta(v) {
+  return v.fecha_key || fechaLocal(tsToDate(v.fecha));
+}
+
+function resumenDesdeVentas(fecha, ventas) {
+  const validas = (ventas || []).filter(v => !v.anulada);
+  const anuladas = (ventas || []).filter(v => v.anulada);
+  return {
+    fecha,
+    num_ventas: validas.length,
+    total_ventas: validas.reduce((s, v) => s + (v.total || 0), 0),
+    ventas_anuladas: anuladas.length,
+    total_anulado: anuladas.reduce((s, v) => s + (v.total || 0), 0)
+  };
+}
+
+function resumenesDesdeVentas(ventas) {
+  const porDia = {};
+  (ventas || []).forEach(v => {
+    const fecha = fechaVenta(v);
+    if (!porDia[fecha]) porDia[fecha] = [];
+    porDia[fecha].push(v);
+  });
+  return Object.entries(porDia).map(([fecha, lista]) => resumenDesdeVentas(fecha, lista));
+}
+
+async function guardarResumenes(resumenes, metaId = null, metaData = {}) {
+  const batch = writeBatch(db());
+  resumenes.forEach(r => {
+    batch.set(doc(db(), 'resumenes_diarios', r.fecha), {
+      ...r,
+      actualizado: serverTimestamp()
+    }, { merge: true });
+  });
+  if (metaId) {
+    batch.set(doc(db(), 'resumenes_migraciones', metaId), {
+      ...metaData,
+      actualizado: serverTimestamp()
+    }, { merge: true });
+  }
+  await batch.commit();
+}
+
+function invalidarVentasCache(fecha = null) {
+  if (fecha) _ventasFechaCache.delete(fecha);
+  else _ventasFechaCache.clear();
+  _ventasRangoCache.clear();
+  _ventasRecientesCache.clear();
+  if (fecha) _resumenDiaCache.delete(fecha);
+  else _resumenDiaCache.clear();
+  _resumenMesCache.clear();
+  _cierresCache = null;
+  _cierresCargadoEn = 0;
+}
+
+function acumularStock(mapa, productoId, cantidad) {
+  if (!productoId || !cantidad) return;
+  mapa.set(productoId, (mapa.get(productoId) || 0) + cantidad);
+}
+
+function stockNecesarioDesdeItems(items) {
+  const mapa = new Map();
+  (items || []).forEach(item => {
+    if (item._ancheta_id) {
+      (item._ancheta_items || []).forEach(sub => {
+        acumularStock(mapa, sub.producto_id, (sub.cantidad || 0) * (item.cantidad || 0));
+      });
+    } else {
+      acumularStock(mapa, item.producto_id, item.cantidad || 0);
+    }
+  });
+  return mapa;
+}
 
 // ── State ─────────────────────────────────────────────
 let productos = [];   // alias local del caché
@@ -138,33 +247,126 @@ function escapeJsString(value) {
 /* ═══════════════════════════════════════════════════════
    VENTAS
 ═══════════════════════════════════════════════════════ */
-async function getVentasHoy() {
+async function getVentasHoy(forzar = false) {
+  return getVentasPorFecha(fechaLocal(), forzar);
+}
+
+async function getVentasRecientesHoy(forzar = false) {
   const hoy = fechaLocal();
+  const cached = _ventasRecientesCache.get(hoy);
+  if (!forzar && cacheVigente(cached)) return cached.data;
   const snap = await getDocs(
     query(collection(db(), 'ventas'),
       where('fecha_key', '==', hoy),
-      orderBy('fecha', 'desc'))
+      orderBy('fecha', 'desc'),
+      limit(DASH_VENTAS_LIMIT))
   );
-  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  return guardarCache(_ventasRecientesCache, hoy, snap.docs.map(d => ({ id: d.id, ...d.data() })));
 }
 
-async function getVentasPorFecha(fechaStr) {
+async function getVentasPorFecha(fechaStr, forzar = false) {
+  const cached = _ventasFechaCache.get(fechaStr);
+  if (!forzar && cacheVigente(cached)) return cached.data;
   const snap = await getDocs(
     query(collection(db(), 'ventas'),
       where('fecha_key', '==', fechaStr),
       orderBy('fecha', 'desc'))
   );
-  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  return guardarCache(_ventasFechaCache, fechaStr, snap.docs.map(d => ({ id: d.id, ...d.data() })));
 }
 
-async function getVentasRango(desde, hasta) {
+async function getVentasRango(desde, hasta, forzar = false) {
+  const key = rangoKey(desde, hasta);
+  const cached = _ventasRangoCache.get(key);
+  if (!forzar && cacheVigente(cached)) return cached.data;
   const snap = await getDocs(
     query(collection(db(), 'ventas'),
       where('fecha_key', '>=', desde),
       where('fecha_key', '<=', hasta),
       orderBy('fecha_key', 'desc'))
   );
-  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  return guardarCache(_ventasRangoCache, key, snap.docs.map(d => ({ id: d.id, ...d.data() })));
+}
+
+async function asegurarResumenDia(fecha) {
+  const cached = _resumenDiaCache.get(fecha);
+  if (cacheVigente(cached)) return cached.data;
+
+  const ref = doc(db(), 'resumenes_diarios', fecha);
+  try {
+    const snap = await getDoc(ref);
+    if (snap.exists()) return guardarCache(_resumenDiaCache, fecha, { fecha, ...snap.data() });
+  } catch (e) {
+    console.warn('No se pudo leer resumen diario:', e.message || e);
+  }
+
+  const ventas = await getVentasPorFecha(fecha);
+  const resumen = resumenDesdeVentas(fecha, ventas);
+  try {
+    await setDoc(ref, { ...resumen, actualizado: serverTimestamp() }, { merge: true });
+  } catch (e) {
+    console.warn('No se pudo guardar resumen diario:', e.message || e);
+  }
+  return guardarCache(_resumenDiaCache, fecha, resumen);
+}
+
+async function ajustarResumenDia(fecha, { totalDelta = 0, countDelta = 0, totalAnuladoDelta = 0, anuladasDelta = 0 }) {
+  try {
+    await setDoc(doc(db(), 'resumenes_diarios', fecha), {
+      fecha,
+      total_ventas: increment(totalDelta),
+      num_ventas: increment(countDelta),
+      total_anulado: increment(totalAnuladoDelta),
+      ventas_anuladas: increment(anuladasDelta),
+      actualizado: serverTimestamp()
+    }, { merge: true });
+    _resumenDiaCache.delete(fecha);
+    _resumenMesCache.clear();
+  } catch (e) {
+    console.warn('No se pudo actualizar resumen diario:', e.message || e);
+  }
+}
+
+async function getResumenesMes(anio, mes) {
+  const key = mesKey(anio, mes);
+  const cached = _resumenMesCache.get(key);
+  if (cacheVigente(cached, CACHE_TTL_MS)) return cached.data;
+
+  const { desde, hasta } = rangoMes(anio, mes);
+  const metaRef = doc(db(), 'resumenes_migraciones', key);
+  let metaSnap = null;
+  try {
+    metaSnap = await getDoc(metaRef);
+  } catch (e) {
+    console.warn('No se pudo leer migracion de resumenes:', e.message || e);
+    const ventas = await getVentasRango(desde, hasta);
+    return guardarCache(_resumenMesCache, key, resumenesDesdeVentas(ventas));
+  }
+
+  if (!metaSnap.exists()) {
+    const ventas = await getVentasRango(desde, hasta);
+    const resumenes = resumenesDesdeVentas(ventas);
+    try {
+      await guardarResumenes(resumenes, key, { mes: key, desde, hasta });
+    } catch (e) {
+      console.warn('No se pudieron guardar resumenes del mes:', e.message || e);
+    }
+    return guardarCache(_resumenMesCache, key, resumenes);
+  }
+
+  try {
+    const snap = await getDocs(
+      query(collection(db(), 'resumenes_diarios'),
+        where('fecha', '>=', desde),
+        where('fecha', '<=', hasta),
+        orderBy('fecha', 'desc'))
+    );
+    return guardarCache(_resumenMesCache, key, snap.docs.map(d => ({ fecha: d.id, ...d.data() })));
+  } catch (e) {
+    console.warn('No se pudieron leer resumenes del mes:', e.message || e);
+    const ventas = await getVentasRango(desde, hasta);
+    return guardarCache(_resumenMesCache, key, resumenesDesdeVentas(ventas));
+  }
 }
 
 /* ═══════════════════════════════════════════════════════
@@ -175,15 +377,19 @@ async function loadDashboard() {
   $('fecha-hoy').textContent = hoy.toLocaleDateString('es-CO', { weekday:'long', year:'numeric', month:'long', day:'numeric' });
 
   // Paralelo: productos (caché) + ventas hoy (siempre fresco)
-  const [prods, todasVentas] = await Promise.all([getProductos(), getVentasHoy()]);
+  const fechaHoy = fechaLocal(hoy);
+  const [prods, resumenHoy, todasVentas] = await Promise.all([
+    getProductos(),
+    asegurarResumenDia(fechaHoy),
+    getVentasRecientesHoy()
+  ]);
   productos = prods;
 
-  const ventas  = todasVentas.filter(v => !v.anulada);
   const alertas = prods.filter(p => p.stock <= p.stock_minimo);
 
   $('d-productos').textContent  = prods.length;
-  $('d-ventas-hoy').textContent = ventas.length;
-  $('d-total-hoy').textContent  = fmtCOP(ventas.reduce((s, v) => s + (v.total || 0), 0));
+  $('d-ventas-hoy').textContent = resumenHoy.num_ventas || 0;
+  $('d-total-hoy').textContent  = fmtCOP(resumenHoy.total_ventas || 0);
   $('d-alertas').textContent    = alertas.length;
 
   const card = $('d-alertas-card');
@@ -239,10 +445,59 @@ async function loadDashboard() {
 window.anularVenta = async function(ventaId) {
   if (!confirm('¿Anular esta venta? El stock de los productos será devuelto.')) return;
 
-  const ventaSnap = await getDoc(doc(db(), 'ventas', ventaId));
+  const ventaRef = doc(db(), 'ventas', ventaId);
+  const ventaSnap = await getDoc(ventaRef);
   if (!ventaSnap.exists()) { alert('Venta no encontrada'); return; }
   const v = ventaSnap.data();
   if (v.anulada) { alert('Esta venta ya fue anulada.'); return; }
+  const fechaKey = fechaVenta(v);
+  await asegurarResumenDia(fechaKey);
+
+  const reposiciones = stockNecesarioDesdeItems(v.items || []);
+  const nuevosStocks = {};
+  await runTransaction(db(), async tx => {
+    const ventaActual = await tx.get(ventaRef);
+    if (!ventaActual.exists()) throw new Error('Venta no encontrada');
+    if (ventaActual.data().anulada) throw new Error('Esta venta ya fue anulada.');
+
+    const productosTx = [];
+    for (const [productoId, cantidad] of reposiciones.entries()) {
+      const prodRef = doc(db(), 'productos', productoId);
+      const prodSnap = await tx.get(prodRef);
+      if (prodSnap.exists()) {
+        productosTx.push({ ref: prodRef, id: productoId, stock: prodSnap.data().stock || 0, cantidad });
+      }
+    }
+
+    productosTx.forEach(p => {
+      const nuevoStock = p.stock + p.cantidad;
+      nuevosStocks[p.id] = nuevoStock;
+      tx.update(p.ref, { stock: nuevoStock });
+    });
+    tx.update(ventaRef, {
+      anulada:         true,
+      fecha_anulacion: serverTimestamp()
+    });
+  });
+
+  if (_productosCache) {
+    Object.entries(nuevosStocks).forEach(([id, stock]) => {
+      const idx = _productosCache.findIndex(p => p.id === id);
+      if (idx >= 0) _productosCache[idx].stock = stock;
+    });
+    productos = _productosCache;
+  }
+  invalidarVentasCache(fechaKey);
+  await ajustarResumenDia(fechaKey, {
+    totalDelta: -(v.total || 0),
+    countDelta: -1,
+    totalAnuladoDelta: v.total || 0,
+    anuladasDelta: 1
+  });
+
+  showMsg('dash-msg', 'Venta anulada y stock devuelto correctamente.', 'warn');
+  if ($('tab-dashboard')?.classList.contains('active')) loadDashboard();
+  return;
 
   // Devolver stock — distingue producto normal vs ancheta
   for (const item of (v.items || [])) {
@@ -602,7 +857,10 @@ window.confirmarAgregarCarrito = function() {
   } else if (productoParaCarrito) {
     if (cant > productoParaCarrito.stock) { alert('Stock insuficiente'); return; }
     const existing = carrito.find(c => c.producto_id === productoParaCarrito.id);
-    if (existing) { existing.cantidad += cant; }
+    if (existing) {
+      if (existing.cantidad + cant > productoParaCarrito.stock) { alert('Stock insuficiente'); return; }
+      existing.cantidad += cant;
+    }
     else {
       carrito.push({
         producto_id:     productoParaCarrito.id,
@@ -640,7 +898,14 @@ function renderCarrito() {
 
 window.actualizarCantCarrito = function(i, val) {
   const v = parseFloat(val);
-  if (v > 0) carrito[i].cantidad = v;
+  if (v > 0) {
+    const item = carrito[i];
+    if (item && !item._ancheta_id) {
+      const p = productos.find(x => x.id === item.producto_id);
+      if (p && v > p.stock) { alert('Stock insuficiente'); renderCarrito(); return; }
+    }
+    carrito[i].cantidad = v;
+  }
   renderCarrito();
 };
 window.eliminarCarrito  = function(i) { carrito.splice(i, 1); renderCarrito(); };
@@ -708,6 +973,69 @@ window.confirmarVenta = async function() {
   const medio_pago = document.querySelector('input[name="medio_pago"]:checked')?.value || 'efectivo';
   const ahora    = new Date();
   const resumen  = carrito.map(c => `${c.nombre_producto} x${c.cantidad}`).join(', ');
+  const fechaKey = fechaLocal(ahora);
+
+  await asegurarResumenDia(fechaKey);
+  const nuevaVentaRef = doc(collection(db(), 'ventas'));
+  const ventaData = {
+    items:             carrito.map(c => ({ ...c })),
+    productos_resumen: resumen,
+    subtotal:          sub,
+    descuento:         desc,
+    total,
+    medio_pago,
+    efectivo:          efectivo || 0,
+    vuelto:            efectivo ? efectivo - total : 0,
+    anulada:           false,
+    fecha:             serverTimestamp(),
+    fecha_key:         fechaKey
+  };
+  const stockNecesario = stockNecesarioDesdeItems(carrito);
+  const nuevosStocks = {};
+
+  try {
+    await runTransaction(db(), async tx => {
+      const productosTx = [];
+      for (const [productoId, cantidad] of stockNecesario.entries()) {
+        const prodRef = doc(db(), 'productos', productoId);
+        const prodSnap = await tx.get(prodRef);
+        if (!prodSnap.exists()) throw new Error('Producto no encontrado durante la venta.');
+        const data = prodSnap.data();
+        const stockActual = data.stock || 0;
+        if (stockActual < cantidad) {
+          throw new Error(`Stock insuficiente para ${data.nombre || 'un producto'}. Disponible: ${stockActual}`);
+        }
+        productosTx.push({ ref: prodRef, id: productoId, stock: stockActual, cantidad });
+      }
+
+      tx.set(nuevaVentaRef, ventaData);
+      productosTx.forEach(p => {
+        const nuevoStock = p.stock - p.cantidad;
+        nuevosStocks[p.id] = nuevoStock;
+        tx.update(p.ref, { stock: nuevoStock });
+      });
+    });
+  } catch (e) {
+    alert(e.message || 'No se pudo registrar la venta.');
+    return;
+  }
+
+  if (_productosCache) {
+    Object.entries(nuevosStocks).forEach(([id, stock]) => {
+      const idx = _productosCache.findIndex(p => p.id === id);
+      if (idx >= 0) _productosCache[idx].stock = stock;
+    });
+    productos = _productosCache;
+  }
+  invalidarVentasCache(fechaKey);
+  await ajustarResumenDia(fechaKey, { totalDelta: total, countDelta: 1 });
+
+  showMsg('venta-msg', `Venta registrada. Total: ${fmtCOP(total)}`, 'ok');
+  if (confirm('Venta registrada. Â¿Descargar factura PDF?')) {
+    await imprimirFactura(nuevaVentaRef.id);
+  }
+  limpiarCarrito();
+  return;
 
   const ventaRef = await addDoc(collection(db(), 'ventas'), {
     items:             carrito.map(c => ({ ...c })),
@@ -835,17 +1163,14 @@ window.renderCalendario = async function() {
   const meses = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
   $('cal-label').textContent = `${meses[calMes-1]} ${calAnio}`;
 
-  const desde = `${calAnio}-${String(calMes).padStart(2,'0')}-01`;
-  const hasta = `${calAnio}-${String(calMes).padStart(2,'0')}-31`;
-  const todasVentas = await getVentasRango(desde, hasta);
-  const ventas = todasVentas.filter(v => !v.anulada);
-
   const ventasPorDia = {};
-  ventas.forEach(v => {
-    const key = v.fecha_key;
-    if (!ventasPorDia[key]) ventasPorDia[key] = { total: 0, num_ventas: 0 };
-    ventasPorDia[key].total      += v.total || 0;
-    ventasPorDia[key].num_ventas += 1;
+  const resumenesMes = await getResumenesMes(calAnio, calMes);
+  resumenesMes.forEach(r => {
+    if ((r.num_ventas || 0) <= 0) return;
+    ventasPorDia[r.fecha] = {
+      total: r.total_ventas || 0,
+      num_ventas: r.num_ventas || 0
+    };
   });
 
   const primerDia = new Date(calAnio, calMes - 1, 1).getDay();
@@ -1002,12 +1327,19 @@ window.ejecutarCierre = async function() {
     ? '<tr><td colspan="3" class="empty">Sin datos</td></tr>'
     : detalle.map(d => `<tr><td>${d.nombre}</td><td>${d.vendido}</td><td style="color:var(--green)">${fmtCOP(d.ganancia)}</td></tr>`).join('');
 
+  _cierresCache = null;
+  _cierresCargadoEn = 0;
   loadCierreHistorial();
 };
 
 async function loadCierreHistorial() {
-  const snap    = await getDocs(query(collection(db(), 'cierres'), orderBy('fecha', 'desc')));
-  const cierres = snap.docs.map(d => d.data());
+  let cierres = _cierresCache;
+  if (!cierres || (Date.now() - _cierresCargadoEn) > CACHE_TTL_MS) {
+    const snap = await getDocs(query(collection(db(), 'cierres'), orderBy('fecha', 'desc')));
+    cierres = snap.docs.map(d => d.data());
+    _cierresCache = cierres;
+    _cierresCargadoEn = Date.now();
+  }
   const tbody   = $('cierre-historial-body');
   tbody.innerHTML = cierres.length === 0
     ? '<tr><td colspan="4" class="empty">Sin cierres registrados</td></tr>'

@@ -1,4 +1,4 @@
-const CACHE_NAME = 'sistemahibrido-v4';
+const CACHE_NAME = 'sistemahibrido-v5';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
@@ -27,8 +27,11 @@ self.addEventListener('activate', event => {
   self.clients.claim();
 });
 
-// Fetch - network first for API, cache first for static
+const NETWORK_FIRST_PATHS = new Set(['/', '/index.html', '/css/style.css', '/js/app.js', '/sw.js']);
+
+// Fetch - network first for app shell, cache first for vendor/static
 self.addEventListener('fetch', event => {
+  if (event.request.method !== 'GET') return;
   const url = new URL(event.request.url);
 
   // API calls: network first, fallback to stored IndexedDB data handled in app
@@ -43,7 +46,18 @@ self.addEventListener('fetch', event => {
     return;
   }
 
-  // Static: cache first
+  if (url.origin === self.location.origin && NETWORK_FIRST_PATHS.has(url.pathname)) {
+    event.respondWith(
+      fetch(event.request).then(res => {
+        const clone = res.clone();
+        caches.open(CACHE_NAME).then(c => c.put(event.request, clone));
+        return res;
+      }).catch(() => caches.match(event.request))
+    );
+    return;
+  }
+
+  // Static pesado/vendor: cache first
   event.respondWith(
     caches.match(event.request).then(cached =>
       cached || fetch(event.request).then(res => {
