@@ -202,6 +202,11 @@ body {
 
 /* ── Search ──────────────────────────────────────────────────── */
 .search-bar { margin-bottom: 16px; }
+.inv-search-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
 .search-bar input {
   width: 100%;
   max-width: 380px;
@@ -216,6 +221,11 @@ body {
   transition: border-color 0.15s;
 }
 .search-bar input:focus { border-color: var(--teal); }
+.inv-search-row select {
+  width: 160px;
+  flex: 0 0 160px;
+  background: var(--bg2);
+}
 
 /* ── Forms ───────────────────────────────────────────────────── */
 .form-group { display: flex; flex-direction: column; gap: 7px; margin-bottom: 18px; }
@@ -766,6 +776,17 @@ input:focus, select:focus {
   .search-bar input {
     max-width: none;
     width: 100%;
+  }
+  .inv-search-row {
+    align-items: stretch;
+    flex-wrap: wrap;
+  }
+  .inv-search-row input {
+    flex: 1 1 220px;
+  }
+  .inv-search-row select {
+    flex: 1 1 140px;
+    width: auto;
   }
 
   .btn-primary,

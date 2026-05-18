@@ -225,6 +225,7 @@ let calMes  = new Date().getMonth() + 1;
 const INV_PAGE_SIZE = 50;
 let invPagina = 0;
 let invFiltro = '';
+let invCodigoFiltro = 'todos';
 
 // ── Connection status ─────────────────────────────────
 function updateConnStatus() {
@@ -623,13 +624,23 @@ window.anularVenta = async function(ventaId) {
 /* ═══════════════════════════════════════════════════════
    INVENTARIO  — paginado + búsqueda local (sin re-leer Firestore)
 ═══════════════════════════════════════════════════════ */
+function productosInventarioFiltrados() {
+  return productos.filter(p => {
+    const codigo = (p.codigo_barras || '').trim();
+    const coincideTexto = !invFiltro ||
+      p.nombre.toLowerCase().includes(invFiltro) ||
+      (p.categoria || '').toLowerCase().includes(invFiltro) ||
+      codigo.toLowerCase().includes(invFiltro);
+    const coincideCodigo =
+      invCodigoFiltro === 'todos' ||
+      (invCodigoFiltro === 'con' && codigo) ||
+      (invCodigoFiltro === 'sin' && !codigo);
+    return coincideTexto && coincideCodigo;
+  });
+}
+
 function renderInventarioPaginado() {
-  const lista   = invFiltro
-    ? productos.filter(p =>
-        p.nombre.toLowerCase().includes(invFiltro) ||
-        (p.categoria || '').toLowerCase().includes(invFiltro) ||
-        (p.codigo_barras || '').includes(invFiltro))
-    : productos;
+  const lista   = productosInventarioFiltrados();
 
   const total   = lista.length;
   const inicio  = invPagina * INV_PAGE_SIZE;
@@ -675,7 +686,7 @@ function renderInventarioPaginado() {
 }
 
 window.invIrPagina = function(pag) {
-  const lista  = invFiltro ? productos.filter(p => p.nombre.toLowerCase().includes(invFiltro)) : productos;
+  const lista  = productosInventarioFiltrados();
   const maxPag = Math.ceil(lista.length / INV_PAGE_SIZE) - 1;
   invPagina = Math.max(0, Math.min(pag, maxPag));
   renderInventarioPaginado();
@@ -683,6 +694,7 @@ window.invIrPagina = function(pag) {
 
 window.filtrarInventario = function() {
   invFiltro = $('inv-search').value.toLowerCase().trim();
+  invCodigoFiltro = $('inv-codigo-filtro')?.value || 'todos';
   invPagina = 0;
   renderInventarioPaginado();
 };

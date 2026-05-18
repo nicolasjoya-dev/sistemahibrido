@@ -254,7 +254,14 @@
       <button class="btn-primary" onclick="openModalProducto()">+ Nuevo Producto</button>
     </div>
     <div id="inv-msg"></div>
-    <div class="search-bar"><input type="text" id="inv-search" placeholder="Buscar producto…" oninput="filtrarInventario()"/></div>
+    <div class="search-bar inv-search-row">
+      <input type="text" id="inv-search" placeholder="Buscar producto…" oninput="filtrarInventario()"/>
+      <select id="inv-codigo-filtro" onchange="filtrarInventario()">
+        <option value="todos">Todos</option>
+        <option value="con">Con código</option>
+        <option value="sin">Sin código</option>
+      </select>
+    </div>
     <div class="panel">
       <table class="data-table" id="inv-table">
         <thead><tr><th>Nombre</th><th>Categoría</th><th>P. Compra</th><th>P. Venta</th><th>Stock</th><th>Mín.</th><th>Unidad</th><th>Estado</th><th>Acciones</th></tr></thead>
