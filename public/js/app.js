@@ -468,8 +468,8 @@ async function loadDashboard() {
   const alertas = prods.filter(p => p.stock <= p.stock_minimo);
   const valorInventario = prods.reduce((sum, p) => {
     const stock = parseFloat(p.stock) || 0;
-    const precioVenta = parseFloat(p.precio_venta) || 0;
-    return sum + (stock * precioVenta);
+    const precioCompra = parseFloat(p.precio_compra) || 0;
+    return sum + (stock * precioCompra);
   }, 0);
 
   $('d-productos').textContent  = prods.length;
