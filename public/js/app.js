@@ -817,6 +817,73 @@ function codigoDesdeResultadoScanner(result) {
   return limpiarCodigo(texto);
 }
 
+function crearLectorScanner() {
+  const zxing = window.ZXingBrowser;
+  try {
+    if (zxing?.DecodeHintType && zxing?.BarcodeFormat) {
+      const hints = new Map();
+      const formatos = [
+        zxing.BarcodeFormat.CODE_128,
+        zxing.BarcodeFormat.CODE_39,
+        zxing.BarcodeFormat.EAN_13,
+        zxing.BarcodeFormat.EAN_8,
+        zxing.BarcodeFormat.UPC_A,
+        zxing.BarcodeFormat.UPC_E
+      ].filter(Boolean);
+      if (zxing.DecodeHintType.TRY_HARDER !== undefined) {
+        hints.set(zxing.DecodeHintType.TRY_HARDER, true);
+      }
+      if (zxing.DecodeHintType.POSSIBLE_FORMATS !== undefined && formatos.length > 0) {
+        hints.set(zxing.DecodeHintType.POSSIBLE_FORMATS, formatos);
+      }
+      return new zxing.BrowserMultiFormatReader(hints, 200);
+    }
+  } catch (e) {
+    console.warn('No se pudieron aplicar hints al escaner:', e.message || e);
+  }
+  return new zxing.BrowserMultiFormatReader();
+}
+
+function constraintsScanner() {
+  return {
+    video: {
+      facingMode: { ideal: 'environment' },
+      width: { ideal: 1920, min: 640 },
+      height: { ideal: 1080, min: 480 },
+      focusMode: { ideal: 'continuous' }
+    },
+    audio: false
+  };
+}
+
+async function mejorarEnfoqueScanner(video) {
+  const track = video?.srcObject?.getVideoTracks?.()[0];
+  if (!track?.getCapabilities || !track?.applyConstraints) return;
+
+  const caps = track.getCapabilities();
+  const advanced = {};
+  if (Array.isArray(caps.focusMode) && caps.focusMode.includes('continuous')) {
+    advanced.focusMode = 'continuous';
+  }
+  if (Array.isArray(caps.exposureMode) && caps.exposureMode.includes('continuous')) {
+    advanced.exposureMode = 'continuous';
+  }
+  if (Array.isArray(caps.whiteBalanceMode) && caps.whiteBalanceMode.includes('continuous')) {
+    advanced.whiteBalanceMode = 'continuous';
+  }
+  if (caps.zoom && caps.zoom.max > caps.zoom.min) {
+    const objetivo = Math.min(caps.zoom.max, Math.max(caps.zoom.min, 1.4));
+    advanced.zoom = objetivo;
+  }
+
+  if (Object.keys(advanced).length === 0) return;
+  try {
+    await track.applyConstraints({ advanced: [advanced] });
+  } catch (e) {
+    console.warn('No se pudieron mejorar ajustes de camara:', e.message || e);
+  }
+}
+
 window.abrirEscanerBarras = async function() {
   if (!navigator.mediaDevices?.getUserMedia) {
     showMsg('modal-msg', 'Este navegador no permite abrir la camara.', 'error');
@@ -831,7 +898,7 @@ window.abrirEscanerBarras = async function() {
   setScannerMsg('Abriendo camara...', 'ok');
 
   const video = $('scanner-video');
-  scannerReader = new window.ZXingBrowser.BrowserMultiFormatReader();
+  scannerReader = crearLectorScanner();
   const onResult = (result) => {
     if (!result) return;
     const codigo = codigoDesdeResultadoScanner(result);
@@ -843,10 +910,11 @@ window.abrirEscanerBarras = async function() {
 
   try {
     scannerControls = await scannerReader.decodeFromConstraints(
-      { video: { facingMode: { ideal: 'environment' } }, audio: false },
+      constraintsScanner(),
       video,
       (result) => onResult(result)
     );
+    await mejorarEnfoqueScanner(video);
     setScannerMsg('Camara lista. Buscando codigo...', 'ok');
   } catch (e) {
     try {
@@ -855,6 +923,7 @@ window.abrirEscanerBarras = async function() {
         video,
         (result) => onResult(result)
       );
+      await mejorarEnfoqueScanner(video);
       setScannerMsg('Camara lista. Buscando codigo...', 'ok');
     } catch (err) {
       console.warn('No se pudo iniciar escaner:', err.message || err);
