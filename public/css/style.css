@@ -257,6 +257,9 @@ input:focus, select:focus {
   padding-left: 14px;
   padding-right: 14px;
 }
+.mobile-scan-btn {
+  display: none;
+}
 .readonly-field { background: var(--bg); cursor: default; color: var(--muted); }
 .total-field { color: var(--teal) !important; font-weight: 700; font-size: 1.05rem !important; }
 
@@ -847,6 +850,17 @@ input:focus, select:focus {
     gap: 10px;
   }
   .form-group { margin-bottom: 14px; }
+  .mobile-scan-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .inv-search-row .mobile-scan-btn {
+    flex: 0 0 auto;
+    min-height: 46px;
+    padding-left: 14px;
+    padding-right: 14px;
+  }
   .barcode-scan-field {
     grid-template-columns: minmax(0, 1fr) auto;
   }

@@ -227,6 +227,7 @@ let scannerNativeTimer  = null;
 let scannerQuaggaHandler = null;
 let scannerEngine       = '';
 let scannerFallbackTimer = null;
+let scannerDestino      = 'producto';
 let calAnio = new Date().getFullYear();
 let calMes  = new Date().getMonth() + 1;
 
@@ -872,9 +873,16 @@ function codigoDesdeResultadoScanner(result) {
 function completarEscaneoBarras(codigo, motor = 'lector') {
   const limpio = limpiarCodigo(codigo);
   if (!scannerActive || !limpio) return;
-  $('p-barras').value = limpio;
+  if (scannerDestino === 'inventario') {
+    const input = $('inv-search');
+    input.value = limpio;
+    filtrarInventario();
+    showMsg('inv-msg', `Codigo escaneado: ${limpio} (${motor})`, 'ok');
+  } else {
+    $('p-barras').value = limpio;
+    showMsg('modal-msg', `Codigo escaneado: ${limpio} (${motor})`, 'ok');
+  }
   window.cerrarEscanerBarras();
-  showMsg('modal-msg', `Codigo escaneado: ${limpio} (${motor})`, 'ok');
 }
 
 function crearLectorScanner() {
@@ -1132,12 +1140,13 @@ async function iniciarZxingScanner(onResult) {
   }
 }
 
-window.abrirEscanerBarras = async function() {
+window.abrirEscanerBarras = async function(destino = 'producto') {
   if (!navigator.mediaDevices?.getUserMedia) {
-    showMsg('modal-msg', 'Este navegador no permite abrir la camara.', 'error');
+    showMsg(destino === 'inventario' ? 'inv-msg' : 'modal-msg', 'Este navegador no permite abrir la camara.', 'error');
     return;
   }
 
+  scannerDestino = destino;
   scannerActive = true;
   openModal('modal-scanner');
   setScannerMsg('Abriendo camara...', 'ok');
@@ -1169,6 +1178,10 @@ window.abrirEscanerBarras = async function() {
   detenerEscanerBarras();
   closeModal('modal-scanner');
   showMsg('modal-msg', 'No se pudo abrir un lector de codigos. Usa el campo manual.', 'error');
+};
+
+window.abrirEscanerInventario = function() {
+  window.abrirEscanerBarras('inventario');
 };
 
 window.eliminarProducto = async function(id) {
