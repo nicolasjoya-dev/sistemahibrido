@@ -870,6 +870,12 @@ function codigoDesdeResultadoScanner(result) {
   return limpiarCodigo(texto);
 }
 
+function scannerMsgTarget(destino = scannerDestino) {
+  if (destino === 'inventario') return 'inv-msg';
+  if (destino === 'venta') return 'venta-msg';
+  return 'modal-msg';
+}
+
 function completarEscaneoBarras(codigo, motor = 'lector') {
   const limpio = limpiarCodigo(codigo);
   if (!scannerActive || !limpio) return;
@@ -878,6 +884,18 @@ function completarEscaneoBarras(codigo, motor = 'lector') {
     input.value = limpio;
     filtrarInventario();
     showMsg('inv-msg', `Codigo escaneado: ${limpio} (${motor})`, 'ok');
+  } else if (scannerDestino === 'venta') {
+    const input = $('venta-buscar');
+    input.value = limpio;
+    const producto = productos.find(p => limpiarCodigo(p.codigo_barras || '') === limpio);
+    if (producto) {
+      $('venta-sugerencias').innerHTML = '';
+      showMsg('venta-msg', `Producto escaneado: ${producto.nombre} (${motor})`, 'ok');
+      window.abrirModalCantidad({ ...producto, _tipo: 'producto' });
+    } else {
+      window.buscarProductoVenta();
+      showMsg('venta-msg', `Codigo escaneado: ${limpio}. No hay producto exacto.`, 'warn');
+    }
   } else {
     $('p-barras').value = limpio;
     showMsg('modal-msg', `Codigo escaneado: ${limpio} (${motor})`, 'ok');
@@ -1142,7 +1160,7 @@ async function iniciarZxingScanner(onResult) {
 
 window.abrirEscanerBarras = async function(destino = 'producto') {
   if (!navigator.mediaDevices?.getUserMedia) {
-    showMsg(destino === 'inventario' ? 'inv-msg' : 'modal-msg', 'Este navegador no permite abrir la camara.', 'error');
+    showMsg(scannerMsgTarget(destino), 'Este navegador no permite abrir la camara.', 'error');
     return;
   }
 
@@ -1162,7 +1180,7 @@ window.abrirEscanerBarras = async function(destino = 'producto') {
         if (!inicioZxing && scannerActive) {
           detenerEscanerBarras();
           closeModal('modal-scanner');
-          showMsg('modal-msg', 'No se pudo abrir un lector de codigos. Usa el campo manual.', 'error');
+          showMsg(scannerMsgTarget(), 'No se pudo abrir un lector de codigos. Usa el campo manual.', 'error');
         }
       }
     });
@@ -1177,11 +1195,15 @@ window.abrirEscanerBarras = async function(destino = 'producto') {
 
   detenerEscanerBarras();
   closeModal('modal-scanner');
-  showMsg('modal-msg', 'No se pudo abrir un lector de codigos. Usa el campo manual.', 'error');
+  showMsg(scannerMsgTarget(), 'No se pudo abrir un lector de codigos. Usa el campo manual.', 'error');
 };
 
 window.abrirEscanerInventario = function() {
   window.abrirEscanerBarras('inventario');
+};
+
+window.abrirEscanerVenta = function() {
+  window.abrirEscanerBarras('venta');
 };
 
 window.eliminarProducto = async function(id) {

@@ -365,7 +365,10 @@
           <div style="padding:20px">
             <div class="form-group">
               <label>Buscar por nombre o código de barras</label>
-              <input type="text" id="venta-buscar" placeholder="Escribir nombre o escanear código…" oninput="buscarProductoVenta()" autocomplete="off"/>
+              <div class="barcode-scan-field venta-scan-field">
+                <input type="text" id="venta-buscar" placeholder="Escribir nombre o escanear código…" oninput="buscarProductoVenta()" autocomplete="off"/>
+                <button type="button" class="btn-secondary scan-btn mobile-scan-btn" onclick="abrirEscanerVenta()">Escanear</button>
+              </div>
             </div>
             <div id="venta-sugerencias" style="position:relative"></div>
           </div>
