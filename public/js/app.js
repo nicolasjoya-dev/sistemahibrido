@@ -236,12 +236,31 @@ window.addEventListener('online',  updateConnStatus);
 window.addEventListener('offline', updateConnStatus);
 updateConnStatus();
 
+function setMobileMenu(open) {
+  document.body.classList.toggle('mobile-menu-open', open);
+  const btn = document.querySelector('.mobile-menu-btn');
+  if (btn) btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+}
+
+window.toggleMobileMenu = function() {
+  setMobileMenu(!document.body.classList.contains('mobile-menu-open'));
+};
+
+window.closeMobileMenu = function() {
+  setMobileMenu(false);
+};
+
+window.addEventListener('keydown', e => {
+  if (e.key === 'Escape') closeMobileMenu();
+});
+
 // ── Navigation ────────────────────────────────────────
 window.switchTab = function(name, el) {
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
   $('tab-' + name).classList.add('active');
   if (el) el.classList.add('active');
+  closeMobileMenu();
   if (name !== 'dashboard') detenerEscuchaResumenDashboard();
   // Solo carga desde Firestore en primera visita o tabs que siempre necesitan datos frescos
   if (name === 'dashboard')  loadDashboard();
