@@ -221,6 +221,12 @@ let etiquetasCodigo     = [];
 let etiquetasCodigoCargadas = false;
 let scannerControls     = null;
 let scannerReader       = null;
+let scannerActive       = false;
+let scannerNativeStream = null;
+let scannerNativeTimer  = null;
+let scannerQuaggaHandler = null;
+let scannerEngine       = '';
+let scannerFallbackTimer = null;
 let calAnio = new Date().getFullYear();
 let calMes  = new Date().getMonth() + 1;
 
@@ -796,15 +802,61 @@ function setScannerMsg(text, type = 'ok') {
   el.innerHTML = `<div class="msg ${type}">${text}</div>`;
 }
 
-function detenerEscanerBarras() {
-  if (scannerControls?.stop) scannerControls.stop();
-  scannerControls = null;
-  scannerReader = null;
+function limpiarVistaScanner() {
+  $('scanner-frame')?.classList.remove('quagga-mode');
+  const target = $('scanner-quagga');
+  if (target) target.innerHTML = '';
+}
+
+function programarFallbackScanner(engine, ms, fn) {
+  if (scannerFallbackTimer) clearTimeout(scannerFallbackTimer);
+  scannerFallbackTimer = setTimeout(async () => {
+    scannerFallbackTimer = null;
+    if (!scannerActive || scannerEngine !== engine) return;
+    await fn();
+  }, ms);
+}
+
+function detenerCamaraNativa() {
+  if (scannerNativeTimer) clearTimeout(scannerNativeTimer);
+  scannerNativeTimer = null;
+  if (scannerNativeStream) {
+    scannerNativeStream.getTracks().forEach(track => track.stop());
+    scannerNativeStream = null;
+  }
   const video = $('scanner-video');
   if (video?.srcObject) {
     video.srcObject.getTracks().forEach(track => track.stop());
     video.srcObject = null;
   }
+}
+
+function detenerQuaggaScanner() {
+  if (!window.Quagga) return;
+  try {
+    if (scannerQuaggaHandler) window.Quagga.offDetected(scannerQuaggaHandler);
+    window.Quagga.stop();
+  } catch (e) {
+    console.warn('No se pudo detener Quagga:', e.message || e);
+  }
+  scannerQuaggaHandler = null;
+}
+
+function detenerZxingScanner() {
+  if (scannerControls?.stop) scannerControls.stop();
+  scannerControls = null;
+  scannerReader = null;
+}
+
+function detenerEscanerBarras() {
+  scannerActive = false;
+  scannerEngine = '';
+  if (scannerFallbackTimer) clearTimeout(scannerFallbackTimer);
+  scannerFallbackTimer = null;
+  detenerZxingScanner();
+  detenerCamaraNativa();
+  detenerQuaggaScanner();
+  limpiarVistaScanner();
 }
 
 window.cerrarEscanerBarras = function() {
@@ -813,8 +865,16 @@ window.cerrarEscanerBarras = function() {
 };
 
 function codigoDesdeResultadoScanner(result) {
-  const texto = result?.getText ? result.getText() : (result?.text || String(result || ''));
+  const texto = result?.codeResult?.code || (result?.getText ? result.getText() : (result?.text || String(result || '')));
   return limpiarCodigo(texto);
+}
+
+function completarEscaneoBarras(codigo, motor = 'lector') {
+  const limpio = limpiarCodigo(codigo);
+  if (!scannerActive || !limpio) return;
+  $('p-barras').value = limpio;
+  window.cerrarEscanerBarras();
+  showMsg('modal-msg', `Codigo escaneado: ${limpio} (${motor})`, 'ok');
 }
 
 function crearLectorScanner() {
@@ -856,6 +916,31 @@ function constraintsScanner() {
   };
 }
 
+function formatosDetectorNativo() {
+  return ['code_128', 'code_39', 'code_93', 'ean_13', 'ean_8', 'upc_a', 'upc_e'];
+}
+
+async function crearDetectorNativo() {
+  if (!('BarcodeDetector' in window)) return null;
+  let formats = formatosDetectorNativo();
+  try {
+    if (window.BarcodeDetector.getSupportedFormats) {
+      const soportados = await window.BarcodeDetector.getSupportedFormats();
+      formats = formats.filter(f => soportados.includes(f));
+    }
+    return formats.length > 0
+      ? new window.BarcodeDetector({ formats })
+      : new window.BarcodeDetector();
+  } catch (e) {
+    try {
+      return new window.BarcodeDetector();
+    } catch (err) {
+      console.warn('BarcodeDetector no esta disponible:', err.message || err);
+      return null;
+    }
+  }
+}
+
 async function mejorarEnfoqueScanner(video) {
   const track = video?.srcObject?.getVideoTracks?.()[0];
   if (!track?.getCapabilities || !track?.applyConstraints) return;
@@ -884,54 +969,206 @@ async function mejorarEnfoqueScanner(video) {
   }
 }
 
-window.abrirEscanerBarras = async function() {
-  if (!navigator.mediaDevices?.getUserMedia) {
-    showMsg('modal-msg', 'Este navegador no permite abrir la camara.', 'error');
-    return;
-  }
-  if (!window.ZXingBrowser?.BrowserMultiFormatReader) {
-    showMsg('modal-msg', 'No se pudo cargar el lector de codigos.', 'error');
-    return;
-  }
+async function iniciarDetectorNativo(onResult) {
+  const detector = await crearDetectorNativo();
+  if (!detector) return false;
 
-  openModal('modal-scanner');
-  setScannerMsg('Abriendo camara...', 'ok');
+  detenerQuaggaScanner();
+  detenerZxingScanner();
+  limpiarVistaScanner();
 
   const video = $('scanner-video');
-  scannerReader = crearLectorScanner();
-  const onResult = (result) => {
-    if (!result) return;
-    const codigo = codigoDesdeResultadoScanner(result);
-    if (!codigo) return;
-    $('p-barras').value = codigo;
-    window.cerrarEscanerBarras();
-    showMsg('modal-msg', `Codigo escaneado: ${codigo}`, 'ok');
+  scannerEngine = 'native';
+  setScannerMsg('Probando lector nativo de la camara...', 'ok');
+
+  try {
+    scannerNativeStream = await navigator.mediaDevices.getUserMedia(constraintsScanner());
+    video.srcObject = scannerNativeStream;
+    await video.play().catch(() => {});
+    await mejorarEnfoqueScanner(video);
+  } catch (e) {
+    detenerCamaraNativa();
+    console.warn('No se pudo iniciar detector nativo:', e.message || e);
+    return false;
+  }
+
+  const detectar = async () => {
+    if (!scannerActive || scannerEngine !== 'native') return;
+    try {
+      const encontrados = await detector.detect(video);
+      const codigo = limpiarCodigo(encontrados?.[0]?.rawValue || '');
+      if (codigo) {
+        onResult(codigo, 'nativo');
+        return;
+      }
+    } catch (e) {
+      console.warn('Detector nativo fallo:', e.message || e);
+    }
+    scannerNativeTimer = setTimeout(detectar, 180);
   };
+
+  detectar();
+  return true;
+}
+
+function configQuaggaScanner(target) {
+  return {
+    inputStream: {
+      name: 'Live',
+      type: 'LiveStream',
+      target,
+      constraints: {
+        facingMode: 'environment',
+        width: { min: 640, ideal: 1920 },
+        height: { min: 480, ideal: 1080 },
+        aspectRatio: { min: 1, max: 2 }
+      }
+    },
+    locator: {
+      patchSize: 'medium',
+      halfSample: false
+    },
+    numOfWorkers: Math.max(1, Math.min(4, navigator.hardwareConcurrency || 2)),
+    frequency: 12,
+    locate: true,
+    decoder: {
+      readers: [
+        'ean_reader',
+        'ean_8_reader',
+        'upc_reader',
+        'upc_e_reader',
+        'code_128_reader',
+        'code_39_reader',
+        'code_93_reader'
+      ]
+    }
+  };
+}
+
+async function iniciarQuaggaScanner(onResult) {
+  if (!window.Quagga) return false;
+
+  detenerZxingScanner();
+  detenerCamaraNativa();
+  limpiarVistaScanner();
+
+  const frame = $('scanner-frame');
+  const target = $('scanner-quagga');
+  if (!frame || !target) return false;
+  frame.classList.add('quagga-mode');
+  target.innerHTML = '';
+  scannerEngine = 'quagga';
+  setScannerMsg('Usando Quagga2 para codigos de barras...', 'ok');
+
+  try {
+    await new Promise((resolve, reject) => {
+      window.Quagga.init(configQuaggaScanner(target), err => err ? reject(err) : resolve());
+    });
+    scannerQuaggaHandler = data => {
+      const codigo = codigoDesdeResultadoScanner(data);
+      if (codigo) onResult(codigo, 'Quagga2');
+    };
+    window.Quagga.onDetected(scannerQuaggaHandler);
+    window.Quagga.start();
+    const video = target.querySelector('video');
+    if (video) await mejorarEnfoqueScanner(video);
+    programarFallbackScanner('quagga', 12000, async () => {
+      setScannerMsg('Probando lector ZXing de respaldo...', 'ok');
+      const inicioZxing = await iniciarZxingScanner(onResult);
+      if (!inicioZxing && scannerActive) {
+        detenerEscanerBarras();
+        closeModal('modal-scanner');
+        showMsg('modal-msg', 'No se pudo abrir un lector de codigos. Usa el campo manual.', 'error');
+      }
+    });
+    return true;
+  } catch (e) {
+    console.warn('No se pudo iniciar Quagga2:', e.message || e);
+    detenerQuaggaScanner();
+    limpiarVistaScanner();
+    return false;
+  }
+}
+
+async function iniciarZxingScanner(onResult) {
+  if (!window.ZXingBrowser?.BrowserMultiFormatReader) return false;
+
+  detenerQuaggaScanner();
+  detenerCamaraNativa();
+  limpiarVistaScanner();
+  const video = $('scanner-video');
+  scannerEngine = 'zxing';
+  scannerReader = crearLectorScanner();
+  setScannerMsg('Usando lector ZXing de respaldo...', 'ok');
 
   try {
     scannerControls = await scannerReader.decodeFromConstraints(
       constraintsScanner(),
       video,
-      (result) => onResult(result)
+      result => {
+        const codigo = codigoDesdeResultadoScanner(result);
+        if (codigo) onResult(codigo, 'ZXing');
+      }
     );
     await mejorarEnfoqueScanner(video);
-    setScannerMsg('Camara lista. Buscando codigo...', 'ok');
+    return true;
   } catch (e) {
     try {
       scannerControls = await scannerReader.decodeFromVideoDevice(
         undefined,
         video,
-        (result) => onResult(result)
+        result => {
+          const codigo = codigoDesdeResultadoScanner(result);
+          if (codigo) onResult(codigo, 'ZXing');
+        }
       );
       await mejorarEnfoqueScanner(video);
-      setScannerMsg('Camara lista. Buscando codigo...', 'ok');
+      return true;
     } catch (err) {
       console.warn('No se pudo iniciar escaner:', err.message || err);
-      detenerEscanerBarras();
-      closeModal('modal-scanner');
-      showMsg('modal-msg', 'No se pudo abrir la camara. Revisa permisos o usa el campo manual.', 'error');
+      detenerZxingScanner();
+      return false;
     }
   }
+}
+
+window.abrirEscanerBarras = async function() {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    showMsg('modal-msg', 'Este navegador no permite abrir la camara.', 'error');
+    return;
+  }
+
+  scannerActive = true;
+  openModal('modal-scanner');
+  setScannerMsg('Abriendo camara...', 'ok');
+
+  const onResult = (codigo, motor) => completarEscaneoBarras(codigo, motor);
+
+  const inicioNativo = await iniciarDetectorNativo(onResult);
+  if (inicioNativo) {
+    programarFallbackScanner('native', 4500, async () => {
+      const inicioQuagga = await iniciarQuaggaScanner(onResult);
+      if (!inicioQuagga && scannerActive) {
+        const inicioZxing = await iniciarZxingScanner(onResult);
+        if (!inicioZxing && scannerActive) {
+          detenerEscanerBarras();
+          closeModal('modal-scanner');
+          showMsg('modal-msg', 'No se pudo abrir un lector de codigos. Usa el campo manual.', 'error');
+        }
+      }
+    });
+    return;
+  }
+
+  const inicioQuagga = await iniciarQuaggaScanner(onResult);
+  if (inicioQuagga) return;
+
+  const inicioZxing = await iniciarZxingScanner(onResult);
+  if (inicioZxing) return;
+
+  detenerEscanerBarras();
+  closeModal('modal-scanner');
+  showMsg('modal-msg', 'No se pudo abrir un lector de codigos. Usa el campo manual.', 'error');
 };
 
 window.eliminarProducto = async function(id) {

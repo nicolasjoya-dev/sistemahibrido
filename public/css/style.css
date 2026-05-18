@@ -365,6 +365,27 @@ input:focus, select:focus {
   display: block;
   object-fit: cover;
 }
+.scanner-frame #scanner-quagga {
+  position: absolute;
+  inset: 0;
+  display: none;
+}
+.scanner-frame.quagga-mode video {
+  display: none;
+}
+.scanner-frame.quagga-mode #scanner-quagga {
+  display: block;
+}
+.scanner-frame #scanner-quagga video,
+.scanner-frame #scanner-quagga canvas {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.scanner-frame #scanner-quagga canvas {
+  position: absolute;
+  inset: 0;
+}
 .scanner-line {
   position: absolute;
   left: 10%;
