@@ -468,6 +468,21 @@ input:focus, select:focus {
   align-items: start;
 }
 .barcode-form { padding: 22px; }
+.barcode-panel-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.barcode-panel-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.barcode-panel-actions .btn-secondary {
+  padding: 8px 12px;
+}
 .barcode-actions {
   display: flex;
   gap: 10px;
@@ -552,6 +567,12 @@ input:focus, select:focus {
   color: #606775;
   border-color: #d0d5dd;
   flex-shrink: 0;
+}
+.barcode-label-buttons {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 .barcode-print-sheet { display: none; }
 
@@ -867,6 +888,13 @@ input:focus, select:focus {
   .barcode-actions .btn-primary,
   .barcode-actions .btn-secondary {
     flex: 1 1 160px;
+  }
+  .barcode-panel-actions,
+  .barcode-panel-actions .btn-secondary {
+    width: 100%;
+  }
+  .barcode-panel-actions .btn-secondary {
+    flex: 1 1 150px;
   }
   .barcode-preview-card {
     margin: 16px;

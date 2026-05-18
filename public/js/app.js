@@ -224,6 +224,7 @@ let calMes  = new Date().getMonth() + 1;
 
 // Paginación inventario
 const INV_PAGE_SIZE = 50;
+const COD_BATCH_SIZE = 50;
 let invPagina = 0;
 let invFiltro = '';
 let invCodigoFiltro = 'todos';
@@ -1632,13 +1633,49 @@ function etiquetasCodigoRef() {
   return collection(db(), 'etiquetas_codigos');
 }
 
-function crearCodigoUnico() {
+function codigosOcupados() {
+  const usados = new Set();
+  productos.forEach(p => {
+    const codigo = codigoProductoActual(p);
+    if (codigo) usados.add(codigo);
+  });
+  etiquetasCodigo.forEach(item => {
+    const codigo = limpiarCodigo(item.codigo);
+    if (codigo) usados.add(codigo);
+  });
+  return usados;
+}
+
+function codigoUsadoEnOtraEtiqueta(codigo, productoId) {
+  const buscado = limpiarCodigo(codigo);
+  if (!buscado) return false;
+  return etiquetasCodigo.some(item =>
+    limpiarCodigo(item.codigo) === buscado && item.producto_id !== productoId);
+}
+
+function etiquetasPendientesDeProducto(productoId, codigo = '') {
+  const buscado = limpiarCodigo(codigo);
+  return etiquetasCodigo.filter(item =>
+    item.producto_id === productoId && (!buscado || limpiarCodigo(item.codigo) === buscado));
+}
+
+function datosEtiquetaCodigo(p, codigo) {
+  return {
+    producto_id: p.id,
+    nombre: p.nombre,
+    codigo,
+    precio_venta: p.precio_venta || 0,
+    guardado_en_producto: true
+  };
+}
+
+function crearCodigoUnico(usados = codigosOcupados()) {
   let codigo = '';
   do {
     const tiempo = Date.now().toString(36).toUpperCase();
     const azar = Math.random().toString(36).slice(2, 5).toUpperCase().padEnd(3, '0');
     codigo = `SH${tiempo}${azar}`;
-  } while (productoConCodigo(codigo));
+  } while (productoConCodigo(codigo) || usados.has(codigo));
   return codigo;
 }
 
@@ -1820,12 +1857,14 @@ window.agregarEtiquetaCodigo = async function() {
 function etiquetaCodigoHtml(item, i, modo = 'lista') {
   const svgId = modo === 'print' ? `cod-print-svg-${i}` : `cod-label-svg-${i}`;
   const quitar = modo === 'print' ? '' : `<button class="btn-icon del" onclick="quitarEtiquetaCodigo(${i})">Quitar</button>`;
+  const borrarCodigo = modo === 'print' ? '' : `<button class="btn-icon del" onclick="borrarCodigoEtiqueta(${i})">Borrar codigo</button>`;
+  const acciones = modo === 'print' ? '' : `<div class="barcode-label-buttons">${quitar}${borrarCodigo}</div>`;
   const pendiente = modo === 'print' || item.guardado_en_producto !== false ? '' : '<span class="badge badge-bajo" style="font-size:0.68rem">Pendiente</span>';
   return `<div class="barcode-label-card">
     <div class="barcode-label-top">
       <strong>${escapeHtml(item.nombre)}</strong>
       ${pendiente}
-      ${quitar}
+      ${acciones}
     </div>
     <svg id="${svgId}" class="barcode-svg small" role="img" aria-label="Código de barras ${escapeHtml(item.codigo)}"></svg>
     <div class="barcode-label-bottom">
@@ -1857,6 +1896,223 @@ async function cargarEtiquetasCodigo(forzar = false) {
 window.actualizarEtiquetasCodigo = async function() {
   await cargarEtiquetasCodigo(true);
   showMsg('cod-msg', 'Etiquetas actualizadas desde Firebase.', 'ok');
+};
+
+async function prepararCodigosFaltantes() {
+  showMsg('cod-msg', 'Revisando Firebase antes de generar...', 'ok');
+  try {
+    const [prods] = await Promise.all([
+      getProductos(true),
+      cargarEtiquetasCodigo(true)
+    ]);
+    productos = prods;
+    return productos.filter(p => !codigoProductoActual(p));
+  } catch (e) {
+    console.warn('No se pudieron revisar productos para codigos:', e.message || e);
+    showMsg('cod-msg', 'No se pudo revisar Firebase antes de generar codigos.', 'error');
+    return null;
+  }
+}
+
+async function procesarLoteCodigosFaltantes(lote) {
+  if (!lote || lote.length === 0) return { procesados: 0, nuevasEtiquetas: [] };
+
+  const usados = codigosOcupados();
+  const batch = writeBatch(db());
+  const nuevasEtiquetas = [];
+  const actualizados = [];
+
+  lote.forEach(p => {
+    const etiquetasExistentes = etiquetasPendientesDeProducto(p.id)
+      .filter(item => {
+        const codigo = limpiarCodigo(item.codigo);
+        return codigo && !productoConCodigo(codigo, p.id) && !codigoUsadoEnOtraEtiqueta(codigo, p.id);
+      });
+
+    let codigo = limpiarCodigo(etiquetasExistentes[0]?.codigo);
+    if (!codigo) {
+      codigo = crearCodigoUnico(usados);
+      const ref = doc(etiquetasCodigoRef());
+      const etiqueta = datosEtiquetaCodigo(p, codigo);
+      batch.set(ref, { ...etiqueta, creado: serverTimestamp() });
+      nuevasEtiquetas.push({ id: ref.id, ...etiqueta });
+    } else {
+      etiquetasExistentes
+        .filter(item => limpiarCodigo(item.codigo) === codigo && item.id)
+        .forEach(item => {
+          batch.set(doc(db(), 'etiquetas_codigos', item.id), {
+            nombre: p.nombre,
+            precio_venta: p.precio_venta || 0,
+            guardado_en_producto: true,
+            actualizado: serverTimestamp()
+          }, { merge: true });
+        });
+    }
+
+    usados.add(codigo);
+    batch.update(doc(db(), 'productos', p.id), { codigo_barras: codigo });
+    actualizados.push({ productoId: p.id, nombre: p.nombre, precio_venta: p.precio_venta || 0, codigo });
+  });
+
+  await batch.commit();
+
+  actualizados.forEach(item => actualizarCodigoLocal(item.productoId, item.codigo));
+  etiquetasCodigo = etiquetasCodigo.map(item => {
+    const actualizado = actualizados.find(p =>
+      p.productoId === item.producto_id && limpiarCodigo(item.codigo) === p.codigo);
+    return actualizado
+      ? { ...item, nombre: actualizado.nombre, precio_venta: actualizado.precio_venta, guardado_en_producto: true }
+      : item;
+  });
+  etiquetasCodigo.push(...nuevasEtiquetas);
+  etiquetasCodigoCargadas = true;
+  renderEtiquetasCodigo();
+  renderInventarioPaginado();
+  actualizarPreviewCodigo();
+
+  return { procesados: actualizados.length, nuevasEtiquetas };
+}
+
+window.generarLoteCodigosFaltantes = async function() {
+  const faltantes = await prepararCodigosFaltantes();
+  if (!faltantes) return;
+  if (faltantes.length === 0) {
+    showMsg('cod-msg', 'No hay productos sin codigo de barras.', 'ok');
+    return;
+  }
+
+  const lote = faltantes.slice(0, COD_BATCH_SIZE);
+  const escrituras = lote.length * 2;
+  if (!confirm(`Generar codigos para ${lote.length} producto(s) sin codigo? Se guardan en el producto y se agregan a etiquetas pendientes. Aproximado: ${escrituras} escrituras.`)) return;
+
+  try {
+    const r = await procesarLoteCodigosFaltantes(lote);
+    const quedan = Math.max(0, faltantes.length - r.procesados);
+    showMsg('cod-msg', `Lote listo: ${r.procesados} producto(s). Quedan ${quedan} sin codigo.`, 'ok');
+  } catch (e) {
+    console.warn('No se pudo generar lote de codigos:', e.message || e);
+    showMsg('cod-msg', 'No se pudo guardar el lote en Firebase.', 'error');
+  }
+};
+
+function pausa(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+window.generarTodosCodigosFaltantes = async function() {
+  const faltantes = await prepararCodigosFaltantes();
+  if (!faltantes) return;
+  if (faltantes.length === 0) {
+    showMsg('cod-msg', 'No hay productos sin codigo de barras.', 'ok');
+    return;
+  }
+
+  const lotes = Math.ceil(faltantes.length / COD_BATCH_SIZE);
+  const escrituras = faltantes.length * 2;
+  if (!confirm(`Generar codigos para TODOS los ${faltantes.length} producto(s) sin codigo, en ${lotes} lote(s) de ${COD_BATCH_SIZE}? Se guardan en inventario y quedan listos para imprimir. Aproximado: ${escrituras} escrituras.`)) return;
+
+  let procesados = 0;
+  try {
+    for (let i = 0; i < faltantes.length; i += COD_BATCH_SIZE) {
+      const lote = faltantes.slice(i, i + COD_BATCH_SIZE);
+      const r = await procesarLoteCodigosFaltantes(lote);
+      procesados += r.procesados;
+      showMsg('cod-msg', `Generando codigos: ${procesados}/${faltantes.length}`, 'ok');
+      await pausa(250);
+    }
+    showMsg('cod-msg', `Listo: ${procesados} producto(s) con codigo y etiqueta pendiente.`, 'ok');
+  } catch (e) {
+    console.warn('No se pudieron generar todos los codigos:', e.message || e);
+    showMsg('cod-msg', `Se detuvo el proceso. Guardados antes del error: ${procesados}.`, 'error');
+  }
+};
+
+async function borrarCodigoProductoCompleto(productoId, codigoObjetivo = '') {
+  showMsg('cod-msg', 'Revisando etiquetas pendientes...', 'ok');
+  try {
+    const [prods] = await Promise.all([
+      getProductos(true),
+      cargarEtiquetasCodigo(true)
+    ]);
+    productos = prods;
+  } catch (e) {
+    showMsg('cod-msg', 'No se pudo revisar Firebase antes de borrar.', 'error');
+    return;
+  }
+
+  const p = productos.find(x => x.id === productoId);
+  if (!p) {
+    showMsg('cod-msg', 'Producto no encontrado.', 'error');
+    return;
+  }
+
+  const codigoActual = codigoProductoActual(p);
+  const codigo = limpiarCodigo(codigoObjetivo || codigoActual || $('cod-valor')?.value);
+  if (!codigo) {
+    showMsg('cod-msg', 'Este producto no tiene codigo para borrar.', 'warn');
+    return;
+  }
+
+  const borrarDelProducto = !codigoObjetivo || codigoActual === codigo;
+  const relacionadas = etiquetasPendientesDeProducto(p.id, codigo);
+  const accionProducto = borrarDelProducto ? 'el codigo del producto y' : 'solo';
+  if (!confirm(`Borrar ${accionProducto} ${relacionadas.length} etiqueta(s) pendiente(s) con el codigo ${codigo}?`)) return;
+
+  const batch = writeBatch(db());
+  let operaciones = 0;
+  if (borrarDelProducto) {
+    batch.update(doc(db(), 'productos', p.id), { codigo_barras: '' });
+    operaciones++;
+  }
+  relacionadas.forEach(item => {
+    if (item.id) {
+      batch.delete(doc(db(), 'etiquetas_codigos', item.id));
+      operaciones++;
+    }
+  });
+
+  if (operaciones === 0) {
+    showMsg('cod-msg', 'No habia nada que borrar para ese codigo.', 'warn');
+    return;
+  }
+
+  try {
+    await batch.commit();
+  } catch (e) {
+    console.warn('No se pudo borrar codigo completo:', e.message || e);
+    showMsg('cod-msg', 'No se pudo borrar el codigo en Firebase.', 'error');
+    return;
+  }
+
+  if (borrarDelProducto) actualizarCodigoLocal(p.id, '');
+  etiquetasCodigo = etiquetasCodigo.filter(item =>
+    !(item.producto_id === p.id && limpiarCodigo(item.codigo) === codigo));
+  etiquetasCodigoCargadas = true;
+  if (codigoProductoId === p.id && borrarDelProducto) {
+    const input = $('cod-valor');
+    if (input) input.value = '';
+  }
+  renderEtiquetasCodigo();
+  renderInventarioPaginado();
+  actualizarPreviewCodigo();
+  showMsg('cod-msg', borrarDelProducto
+    ? 'Codigo borrado del producto y de etiquetas pendientes.'
+    : 'Etiquetas pendientes borradas. El codigo actual del producto no se toco.', 'ok');
+}
+
+window.borrarCodigoProductoSeleccionado = async function() {
+  const p = productoCodigoSeleccionado();
+  if (!p) {
+    showMsg('cod-msg', 'Selecciona un producto para borrar su codigo.', 'error');
+    return;
+  }
+  await borrarCodigoProductoCompleto(p.id);
+};
+
+window.borrarCodigoEtiqueta = async function(i) {
+  const item = etiquetasCodigo[i];
+  if (!item) return;
+  await borrarCodigoProductoCompleto(item.producto_id, item.codigo);
 };
 
 function renderEtiquetasCodigo() {

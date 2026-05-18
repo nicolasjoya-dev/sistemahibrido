@@ -321,6 +321,7 @@
           <div class="barcode-actions">
             <button class="btn-secondary" onclick="generarCodigoProducto()">Generar</button>
             <button class="btn-secondary" onclick="guardarCodigoProducto()">Guardar en producto</button>
+            <button class="btn-secondary" onclick="borrarCodigoProductoSeleccionado()">Borrar codigo y etiquetas</button>
             <button class="btn-primary" onclick="agregarEtiquetaCodigo()">Añadir a etiquetas</button>
           </div>
         </div>
@@ -337,7 +338,13 @@
     </div>
 
     <div class="panel">
-      <div class="panel-title">Etiquetas pendientes</div>
+      <div class="panel-title barcode-panel-title">
+        <span>Etiquetas pendientes</span>
+        <div class="barcode-panel-actions">
+          <button class="btn-secondary" onclick="generarLoteCodigosFaltantes()">Generar lote 50</button>
+          <button class="btn-secondary" onclick="generarTodosCodigosFaltantes()">Generar todos</button>
+        </div>
+      </div>
       <div id="cod-etiquetas-lista" class="barcode-label-list"></div>
     </div>
     <div id="cod-print-sheet" class="barcode-print-sheet"></div>
