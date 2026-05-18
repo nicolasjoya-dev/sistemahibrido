@@ -78,7 +78,7 @@
 
     if (user) {
       loginScreen.style.display = 'none';
-      appScreen.style.display   = 'flex';
+      appScreen.style.display   = 'block';
       if (userInfo) {
         userInfo.innerHTML = `
           <img src="${user.photoURL || ''}" alt="" style="width:28px;height:28px;border-radius:50%;object-fit:cover;border:2px solid var(--teal)"/>
@@ -136,7 +136,7 @@
   margin-top: 14px; font-size: 0.82rem;
   color: #ff6b6b; min-height: 20px;
 }
-#app-screen { display: none; width: 100%; height: 100vh; }
+#app-screen { display: none; width: 100%; min-height: 100vh; }
 #user-info {
   display: flex; align-items: center; gap: 8px;
   padding: 8px 12px; border-top: 1px solid var(--border, #2a2b2f);
