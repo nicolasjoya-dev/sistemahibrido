@@ -219,6 +219,8 @@ let anchetaParaCarrito  = null;
 let codigoProductoId    = null;
 let etiquetasCodigo     = [];
 let etiquetasCodigoCargadas = false;
+let scannerControls     = null;
+let scannerReader       = null;
 let calAnio = new Date().getFullYear();
 let calMes  = new Date().getMonth() + 1;
 
@@ -786,6 +788,81 @@ window.guardarProducto = async function() {
   productos = _productosCache || [];
   closeModal('modal-producto');
   renderInventarioPaginado();
+};
+
+function setScannerMsg(text, type = 'ok') {
+  const el = $('scanner-msg');
+  if (!el) return;
+  el.innerHTML = `<div class="msg ${type}">${text}</div>`;
+}
+
+function detenerEscanerBarras() {
+  if (scannerControls?.stop) scannerControls.stop();
+  scannerControls = null;
+  scannerReader = null;
+  const video = $('scanner-video');
+  if (video?.srcObject) {
+    video.srcObject.getTracks().forEach(track => track.stop());
+    video.srcObject = null;
+  }
+}
+
+window.cerrarEscanerBarras = function() {
+  detenerEscanerBarras();
+  closeModal('modal-scanner');
+};
+
+function codigoDesdeResultadoScanner(result) {
+  const texto = result?.getText ? result.getText() : (result?.text || String(result || ''));
+  return limpiarCodigo(texto);
+}
+
+window.abrirEscanerBarras = async function() {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    showMsg('modal-msg', 'Este navegador no permite abrir la camara.', 'error');
+    return;
+  }
+  if (!window.ZXingBrowser?.BrowserMultiFormatReader) {
+    showMsg('modal-msg', 'No se pudo cargar el lector de codigos.', 'error');
+    return;
+  }
+
+  openModal('modal-scanner');
+  setScannerMsg('Abriendo camara...', 'ok');
+
+  const video = $('scanner-video');
+  scannerReader = new window.ZXingBrowser.BrowserMultiFormatReader();
+  const onResult = (result) => {
+    if (!result) return;
+    const codigo = codigoDesdeResultadoScanner(result);
+    if (!codigo) return;
+    $('p-barras').value = codigo;
+    window.cerrarEscanerBarras();
+    showMsg('modal-msg', `Codigo escaneado: ${codigo}`, 'ok');
+  };
+
+  try {
+    scannerControls = await scannerReader.decodeFromConstraints(
+      { video: { facingMode: { ideal: 'environment' } }, audio: false },
+      video,
+      (result) => onResult(result)
+    );
+    setScannerMsg('Camara lista. Buscando codigo...', 'ok');
+  } catch (e) {
+    try {
+      scannerControls = await scannerReader.decodeFromVideoDevice(
+        undefined,
+        video,
+        (result) => onResult(result)
+      );
+      setScannerMsg('Camara lista. Buscando codigo...', 'ok');
+    } catch (err) {
+      console.warn('No se pudo iniciar escaner:', err.message || err);
+      detenerEscanerBarras();
+      closeModal('modal-scanner');
+      showMsg('modal-msg', 'No se pudo abrir la camara. Revisa permisos o usa el campo manual.', 'error');
+    }
+  }
 };
 
 window.eliminarProducto = async function(id) {
@@ -2193,7 +2270,9 @@ window.closeModal = function(id) { $(id).classList.remove('open'); };
 
 document.querySelectorAll('.modal-overlay').forEach(overlay => {
   overlay.addEventListener('click', function(e) {
-    if (e.target === this) this.classList.remove('open');
+    if (e.target !== this) return;
+    if (this.id === 'modal-scanner') window.cerrarEscanerBarras();
+    else this.classList.remove('open');
   });
 });
 

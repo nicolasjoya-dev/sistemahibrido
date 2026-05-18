@@ -562,7 +562,13 @@
       <div class="form-group"><label>Stock Mínimo</label><input type="number" id="p-stockmin" value="5" min="0"/></div>
     </div>
     <div class="form-row">
-      <div class="form-group"><label>Código de Barras</label><input type="text" id="p-barras"/></div>
+      <div class="form-group">
+        <label>Código de Barras</label>
+        <div class="barcode-scan-field">
+          <input type="text" id="p-barras"/>
+          <button type="button" class="btn-secondary scan-btn" onclick="abrirEscanerBarras()">Escanear</button>
+        </div>
+      </div>
       <div class="form-group"><label>Unidad</label>
         <select id="p-unidad">
           <option>unidades</option><option>metros</option><option>kilos</option><option>litros</option><option>pares</option><option>cajas</option>
@@ -572,6 +578,24 @@
     <div class="modal-actions">
       <button class="btn-secondary" onclick="closeModal('modal-producto')">Cancelar</button>
       <button class="btn-primary" id="modal-save-btn" onclick="guardarProducto()">Guardar</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="modal-scanner">
+  <div class="modal scanner-modal">
+    <div class="modal-header">
+      <h2>Escanear código</h2>
+      <button class="modal-close" onclick="cerrarEscanerBarras()">✕</button>
+    </div>
+    <div id="scanner-msg"></div>
+    <div class="scanner-frame">
+      <video id="scanner-video" playsinline muted></video>
+      <div class="scanner-line"></div>
+    </div>
+    <p class="scanner-help">Apunta la cámara al código de barras.</p>
+    <div class="modal-actions">
+      <button class="btn-secondary" onclick="cerrarEscanerBarras()">Cancelar</button>
     </div>
   </div>
 </div>
@@ -699,6 +723,7 @@
 </div><!-- /#app-screen -->
 
 <script src="/vendor/JsBarcode.all.min.js"></script>
+<script src="https://unpkg.com/@zxing/browser@0.1.4"></script>
 <script type="module" src="/js/app.js"></script>
 <script>
   if ('serviceWorker' in navigator) {
