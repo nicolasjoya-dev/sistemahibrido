@@ -289,6 +289,7 @@
     <div class="page-header">
       <div><h1>Códigos de Barras</h1><p class="page-sub">Etiquetas internas para productos</p></div>
       <div style="display:flex;gap:10px;flex-wrap:wrap">
+        <button class="btn-secondary" onclick="actualizarEtiquetasCodigo()">Actualizar</button>
         <button class="btn-secondary" onclick="limpiarEtiquetasCodigo()">Limpiar</button>
         <button class="btn-primary" onclick="imprimirEtiquetasCodigo()">Imprimir etiquetas</button>
       </div>
@@ -336,7 +337,7 @@
     </div>
 
     <div class="panel">
-      <div class="panel-title">Etiquetas listas</div>
+      <div class="panel-title">Etiquetas pendientes</div>
       <div id="cod-etiquetas-lista" class="barcode-label-list"></div>
     </div>
     <div id="cod-print-sheet" class="barcode-print-sheet"></div>

@@ -218,6 +218,7 @@ let productoParaCarrito = null;
 let anchetaParaCarrito  = null;
 let codigoProductoId    = null;
 let etiquetasCodigo     = [];
+let etiquetasCodigoCargadas = false;
 let calAnio = new Date().getFullYear();
 let calMes  = new Date().getMonth() + 1;
 
@@ -1627,6 +1628,10 @@ function codigoProductoActual(p) {
   return limpiarCodigo(p?.codigo_barras || '');
 }
 
+function etiquetasCodigoRef() {
+  return collection(db(), 'etiquetas_codigos');
+}
+
 function crearCodigoUnico() {
   let codigo = '';
   do {
@@ -1680,6 +1685,7 @@ function renderCodigosBarras() {
   if ($('cod-valor') && p && !$('cod-valor').value) $('cod-valor').value = codigoProductoActual(p);
   actualizarPreviewCodigo();
   renderEtiquetasCodigo();
+  cargarEtiquetasCodigo();
 }
 
 window.filtrarProductosCodigo = function() {
@@ -1737,7 +1743,7 @@ window.generarCodigoProducto = function() {
   }
   $('cod-valor').value = crearCodigoUnico();
   actualizarPreviewCodigo();
-  showMsg('cod-msg', 'Código generado. Guárdalo en el producto antes de imprimir.', 'ok');
+  showMsg('cod-msg', 'Código generado. Puedes guardarlo en el producto o dejarlo como etiqueta pendiente.', 'ok');
 };
 
 window.guardarCodigoProducto = async function() {
@@ -1765,7 +1771,7 @@ window.guardarCodigoProducto = async function() {
   actualizarPreviewCodigo();
 };
 
-window.agregarEtiquetaCodigo = function() {
+window.agregarEtiquetaCodigo = async function() {
   const p = productoCodigoSeleccionado();
   if (!p) {
     showMsg('cod-msg', 'Selecciona un producto para añadir etiquetas.', 'error');
@@ -1783,20 +1789,30 @@ window.agregarEtiquetaCodigo = function() {
     return;
   }
 
-  if (codigoProductoActual(p) !== codigo) {
-    showMsg('cod-msg', 'Guarda el código en el producto antes de añadir etiquetas.', 'warn');
-    return;
-  }
-
   const cantidad = Math.max(1, Math.min(100, parseInt($('cod-cantidad').value, 10) || 1));
+  const guardadoEnProducto = codigoProductoActual(p) === codigo;
+  const batch = writeBatch(db());
+  const nuevas = [];
   for (let i = 0; i < cantidad; i++) {
-    etiquetasCodigo.push({
+    const ref = doc(etiquetasCodigoRef());
+    const etiqueta = {
       producto_id: p.id,
       nombre: p.nombre,
       codigo,
-      precio_venta: p.precio_venta || 0
-    });
+      precio_venta: p.precio_venta || 0,
+      guardado_en_producto: guardadoEnProducto
+    };
+    batch.set(ref, { ...etiqueta, creado: serverTimestamp() });
+    nuevas.push({ id: ref.id, ...etiqueta });
   }
+  try {
+    await batch.commit();
+  } catch (e) {
+    showMsg('cod-msg', 'No se pudieron guardar las etiquetas en Firebase.', 'error');
+    return;
+  }
+  etiquetasCodigo.push(...nuevas);
+  etiquetasCodigoCargadas = true;
   renderEtiquetasCodigo();
   showMsg('cod-msg', `${cantidad} etiqueta${cantidad > 1 ? 's' : ''} añadida${cantidad > 1 ? 's' : ''}.`, 'ok');
 };
@@ -1804,9 +1820,11 @@ window.agregarEtiquetaCodigo = function() {
 function etiquetaCodigoHtml(item, i, modo = 'lista') {
   const svgId = modo === 'print' ? `cod-print-svg-${i}` : `cod-label-svg-${i}`;
   const quitar = modo === 'print' ? '' : `<button class="btn-icon del" onclick="quitarEtiquetaCodigo(${i})">Quitar</button>`;
+  const pendiente = modo === 'print' || item.guardado_en_producto !== false ? '' : '<span class="badge badge-bajo" style="font-size:0.68rem">Pendiente</span>';
   return `<div class="barcode-label-card">
     <div class="barcode-label-top">
       <strong>${escapeHtml(item.nombre)}</strong>
+      ${pendiente}
       ${quitar}
     </div>
     <svg id="${svgId}" class="barcode-svg small" role="img" aria-label="Código de barras ${escapeHtml(item.codigo)}"></svg>
@@ -1816,6 +1834,30 @@ function etiquetaCodigoHtml(item, i, modo = 'lista') {
     </div>
   </div>`;
 }
+
+async function cargarEtiquetasCodigo(forzar = false) {
+  if (etiquetasCodigoCargadas && !forzar) return etiquetasCodigo;
+
+  const cont = $('cod-etiquetas-lista');
+  if (cont) cont.innerHTML = '<div class="empty">Cargando etiquetas pendientes...</div>';
+
+  try {
+    const snap = await getDocs(query(etiquetasCodigoRef(), orderBy('creado', 'asc')));
+    etiquetasCodigo = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    etiquetasCodigoCargadas = true;
+    renderEtiquetasCodigo();
+    return etiquetasCodigo;
+  } catch (e) {
+    console.warn('No se pudieron cargar etiquetas pendientes:', e.message || e);
+    if (cont) cont.innerHTML = '<div class="empty">No se pudieron cargar las etiquetas pendientes</div>';
+    return etiquetasCodigo;
+  }
+}
+
+window.actualizarEtiquetasCodigo = async function() {
+  await cargarEtiquetasCodigo(true);
+  showMsg('cod-msg', 'Etiquetas actualizadas desde Firebase.', 'ok');
+};
 
 function renderEtiquetasCodigo() {
   const cont = $('cod-etiquetas-lista');
@@ -1830,13 +1872,40 @@ function renderEtiquetasCodigo() {
   etiquetasCodigo.forEach((item, i) => renderSvgCodigo(`cod-label-svg-${i}`, item.codigo, { width: 1.5, height: 48, margin: 4 }));
 }
 
-window.quitarEtiquetaCodigo = function(i) {
+window.quitarEtiquetaCodigo = async function(i) {
+  const item = etiquetasCodigo[i];
+  if (!item) return;
   etiquetasCodigo.splice(i, 1);
   renderEtiquetasCodigo();
+  if (!item.id) return;
+  try {
+    await deleteDoc(doc(db(), 'etiquetas_codigos', item.id));
+  } catch (e) {
+    etiquetasCodigo.splice(i, 0, item);
+    renderEtiquetasCodigo();
+    showMsg('cod-msg', 'No se pudo quitar la etiqueta de Firebase.', 'error');
+  }
 };
 
-window.limpiarEtiquetasCodigo = function() {
+window.limpiarEtiquetasCodigo = async function() {
+  await cargarEtiquetasCodigo(true);
+  if (etiquetasCodigo.length === 0) {
+    renderEtiquetasCodigo();
+    return;
+  }
+  if (!confirm('Limpiar todas las etiquetas pendientes en todos los PC?')) return;
+  const batch = writeBatch(db());
+  etiquetasCodigo.forEach(item => {
+    if (item.id) batch.delete(doc(db(), 'etiquetas_codigos', item.id));
+  });
+  try {
+    await batch.commit();
+  } catch (e) {
+    showMsg('cod-msg', 'No se pudieron limpiar las etiquetas en Firebase.', 'error');
+    return;
+  }
   etiquetasCodigo = [];
+  etiquetasCodigoCargadas = true;
   renderEtiquetasCodigo();
   const sheet = $('cod-print-sheet');
   if (sheet) sheet.innerHTML = '';
