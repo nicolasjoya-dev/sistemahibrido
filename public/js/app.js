@@ -2593,7 +2593,7 @@ window.imprimirEtiquetasCodigo = function() {
 
   const sheet = $('cod-print-sheet');
   sheet.innerHTML = etiquetasCodigo.map((item, i) => etiquetaCodigoHtml(item, i, 'print')).join('');
-  etiquetasCodigo.forEach((item, i) => renderSvgCodigo(`cod-print-svg-${i}`, item.codigo, { width: 0.9, height: 32, margin: 1 }));
+  etiquetasCodigo.forEach((item, i) => renderSvgCodigo(`cod-print-svg-${i}`, item.codigo, { width: 1, height: 48, margin: 1 }));
 
   document.body.classList.add('print-barcodes');
   setTimeout(() => window.print(), 120);
