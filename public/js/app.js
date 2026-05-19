@@ -2214,6 +2214,59 @@ const BACKUP_COLLECTIONS = [
   'auditoria_ignorados'
 ];
 const BACKUP_PRODUCT_SUBCOLLECTIONS = ['entradas'];
+const PRODUCTOS_EXPORT_FIELDS = [
+  'id',
+  'nombre',
+  'categoria',
+  'precio_compra',
+  'precio_venta',
+  'stock',
+  'stock_minimo',
+  'codigo_barras',
+  'unidad'
+];
+let backupImportFormato = 'json';
+
+function cerrarBackupMenus() {
+  document.querySelectorAll('.backup-menu.open').forEach(menu => menu.classList.remove('open'));
+}
+
+window.toggleBackupMenu = function(tipo) {
+  const targetId = tipo === 'import' ? 'backup-import-menu' : 'backup-export-menu';
+  const target = $(targetId);
+  if (!target) return;
+  const abierto = target.classList.contains('open');
+  cerrarBackupMenus();
+  if (!abierto) target.classList.add('open');
+};
+
+window.prepararImportarRespaldo = function(formato = 'json') {
+  backupImportFormato = formato;
+  const input = $('backup-import-file');
+  if (!input) return;
+  input.value = '';
+  const accepts = {
+    json: '.json,application/json',
+    xlsx: '.xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel',
+    csv: '.csv,text/csv'
+  };
+  input.accept = accepts[formato] || accepts.json;
+  cerrarBackupMenus();
+  input.click();
+};
+
+function descargarBlob(nombre, contenido, tipo) {
+  const blob = contenido instanceof Blob ? contenido : new Blob([contenido], { type: tipo });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = nombre;
+  a.style.display = 'none';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1200);
+}
 
 function serializarValorRespaldo(value) {
   if (value === null || value === undefined) return value;
@@ -2266,15 +2319,11 @@ async function exportarColeccionRespaldo(nombre) {
 }
 
 function descargarJsonRespaldo(data) {
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `sistemahibrido-respaldo-${fechaLocal()}-${Date.now()}.json`;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
+  descargarBlob(
+    `sistemahibrido-respaldo-${fechaLocal()}-${Date.now()}.json`,
+    JSON.stringify(data, null, 2),
+    'application/json;charset=utf-8'
+  );
 }
 
 function contarDocsRespaldo(backup) {
@@ -2291,8 +2340,318 @@ function contarDocsRespaldo(backup) {
   return total;
 }
 
-window.exportarRespaldoBaseDatos = async function() {
-  showMsg('backup-msg', 'Preparando respaldo...', 'ok');
+function productoFilaExportacion(p) {
+  return {
+    id: p.id || '',
+    nombre: p.nombre || '',
+    categoria: p.categoria || '',
+    precio_compra: numeroSeguro(p.precio_compra),
+    precio_venta: numeroSeguro(p.precio_venta),
+    stock: numeroSeguro(p.stock),
+    stock_minimo: numeroSeguro(p.stock_minimo),
+    codigo_barras: limpiarCodigo(p.codigo_barras || ''),
+    unidad: p.unidad || 'unidades'
+  };
+}
+
+async function productosParaExportar() {
+  const lista = await getProductos(true);
+  productos = lista;
+  return lista.map(productoFilaExportacion);
+}
+
+function csvEscape(value) {
+  const texto = String(value ?? '');
+  return /[;"\r\n]/.test(texto) ? `"${texto.replace(/"/g, '""')}"` : texto;
+}
+
+function descargarCsvProductos(filas) {
+  const encabezado = PRODUCTOS_EXPORT_FIELDS.join(';');
+  const lineas = filas.map(row => PRODUCTOS_EXPORT_FIELDS.map(campo => csvEscape(row[campo])).join(';'));
+  descargarBlob(
+    `sistemahibrido-productos-${fechaLocal()}-${Date.now()}.csv`,
+    '\ufeff' + [encabezado, ...lineas].join('\r\n'),
+    'text/csv;charset=utf-8'
+  );
+}
+
+function descargarExcelProductos(filas) {
+  if (!window.XLSX?.utils) {
+    throw new Error('No se cargo la libreria de Excel.');
+  }
+  const wb = window.XLSX.utils.book_new();
+  const ws = window.XLSX.utils.json_to_sheet(filas, { header: PRODUCTOS_EXPORT_FIELDS });
+  window.XLSX.utils.book_append_sheet(wb, ws, 'productos');
+  window.XLSX.writeFile(wb, `sistemahibrido-productos-${fechaLocal()}-${Date.now()}.xlsx`);
+}
+
+function detectarFormatoArchivo(file) {
+  const nombre = (file?.name || '').toLowerCase();
+  if (nombre.endsWith('.xlsx') || nombre.endsWith('.xls')) return 'xlsx';
+  if (nombre.endsWith('.csv')) return 'csv';
+  return backupImportFormato || 'json';
+}
+
+function normalizarHeaderImportacion(value) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+}
+
+function valorFilaImportacion(row, aliases) {
+  const normalizado = {};
+  Object.entries(row || {}).forEach(([k, v]) => {
+    normalizado[normalizarHeaderImportacion(k)] = v;
+  });
+  for (const alias of aliases) {
+    const key = normalizarHeaderImportacion(alias);
+    if (normalizado[key] !== undefined && normalizado[key] !== null && String(normalizado[key]).trim() !== '') {
+      return normalizado[key];
+    }
+  }
+  return undefined;
+}
+
+function numeroImportacion(value) {
+  if (value === undefined || value === null || String(value).trim() === '') return undefined;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : undefined;
+  let texto = String(value).trim().replace(/[^\d,.-]/g, '');
+  if (!texto) return undefined;
+  const coma = texto.lastIndexOf(',');
+  const punto = texto.lastIndexOf('.');
+  if (coma >= 0 && punto >= 0) {
+    texto = coma > punto
+      ? texto.replace(/\./g, '').replace(',', '.')
+      : texto.replace(/,/g, '');
+  } else if (coma >= 0) {
+    texto = texto.replace(/\./g, '').replace(',', '.');
+  } else if (/^-?\d{1,3}(\.\d{3})+$/.test(texto)) {
+    texto = texto.replace(/\./g, '');
+  }
+  const n = Number(texto);
+  return Number.isFinite(n) ? n : undefined;
+}
+
+function textoImportacion(value) {
+  if (value === undefined || value === null) return undefined;
+  const texto = String(value).trim();
+  return texto ? texto : undefined;
+}
+
+function normalizarProductoImportacion(row) {
+  const id = textoImportacion(valorFilaImportacion(row, ['id', 'doc_id', 'documento_id']));
+  const nombre = textoImportacion(valorFilaImportacion(row, ['nombre', 'producto', 'name']));
+  const categoria = textoImportacion(valorFilaImportacion(row, ['categoria', 'categoría', 'category']));
+  const unidad = textoImportacion(valorFilaImportacion(row, ['unidad', 'unit']));
+  const codigo = limpiarCodigo(valorFilaImportacion(row, ['codigo_barras', 'codigo barras', 'codigo', 'código', 'barcode', 'ean']) || '');
+  const data = {};
+
+  if (nombre !== undefined) data.nombre = nombre;
+  if (categoria !== undefined) data.categoria = categoria;
+  if (unidad !== undefined) data.unidad = unidad;
+  if (codigo) data.codigo_barras = codigo;
+
+  const compra = numeroImportacion(valorFilaImportacion(row, ['precio_compra', 'p_compra', 'compra', 'costo']));
+  const venta = numeroImportacion(valorFilaImportacion(row, ['precio_venta', 'p_venta', 'venta', 'precio']));
+  const stock = numeroImportacion(valorFilaImportacion(row, ['stock', 'cantidad', 'existencias']));
+  const stockMin = numeroImportacion(valorFilaImportacion(row, ['stock_minimo', 'stock minimo', 'minimo', 'mínimo', 'min']));
+
+  if (compra !== undefined) data.precio_compra = compra;
+  if (venta !== undefined) data.precio_venta = venta;
+  if (stock !== undefined) data.stock = stock;
+  if (stockMin !== undefined) data.stock_minimo = stockMin;
+
+  return { id, codigo, nombre, categoria, data };
+}
+
+function keyNombreCategoria(nombre, categoria) {
+  return `${String(nombre || '').trim().toLowerCase()}|${String(categoria || '').trim().toLowerCase()}`;
+}
+
+function parseCsvProductos(text) {
+  const sample = (text.split(/\r?\n/)[0] || '');
+  const delimiter = (sample.match(/;/g) || []).length >= (sample.match(/,/g) || []).length ? ';' : ',';
+  const rows = [];
+  let row = [];
+  let cell = '';
+  let quoted = false;
+
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    const next = text[i + 1];
+    if (quoted) {
+      if (ch === '"' && next === '"') {
+        cell += '"';
+        i++;
+      } else if (ch === '"') {
+        quoted = false;
+      } else {
+        cell += ch;
+      }
+    } else if (ch === '"') {
+      quoted = true;
+    } else if (ch === delimiter) {
+      row.push(cell);
+      cell = '';
+    } else if (ch === '\n') {
+      row.push(cell);
+      rows.push(row);
+      row = [];
+      cell = '';
+    } else if (ch !== '\r') {
+      cell += ch;
+    }
+  }
+  row.push(cell);
+  if (row.length > 1 || row[0]) rows.push(row);
+
+  if (rows.length === 0) return [];
+  const headers = rows.shift().map(h => h.replace(/^\ufeff/, '').trim());
+  return rows
+    .filter(r => r.some(c => String(c || '').trim()))
+    .map(r => Object.fromEntries(headers.map((h, i) => [h, r[i] ?? ''])));
+}
+
+async function filasDesdeArchivoProductos(file, formato) {
+  if (formato === 'xlsx') {
+    if (!window.XLSX?.read) throw new Error('No se cargo la libreria de Excel.');
+    const buffer = await file.arrayBuffer();
+    const wb = window.XLSX.read(buffer, { type: 'array' });
+    const sheetName = wb.SheetNames[0];
+    if (!sheetName) return [];
+    return window.XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { defval: '' });
+  }
+  if (formato === 'csv') {
+    return parseCsvProductos(await file.text());
+  }
+
+  const json = JSON.parse(await file.text());
+  if (Array.isArray(json)) return json;
+  if (Array.isArray(json.productos)) return json.productos;
+  if (Array.isArray(json.items)) return json.items;
+  return null;
+}
+
+async function importarProductosDesdeFilas(filas, origen = 'archivo') {
+  if (!Array.isArray(filas) || filas.length === 0) {
+    showMsg('backup-msg', 'El archivo no tiene productos para importar.', 'error');
+    return;
+  }
+
+  const existentes = await getProductos(true);
+  const byId = new Map(existentes.map(p => [p.id, p]));
+  const byCode = new Map();
+  const byNameCat = new Map();
+  existentes.forEach(p => {
+    const code = limpiarCodigo(p.codigo_barras || '');
+    if (code && !byCode.has(code)) byCode.set(code, p);
+    const key = keyNombreCategoria(p.nombre, p.categoria);
+    if (key !== '|' && !byNameCat.has(key)) byNameCat.set(key, p);
+  });
+
+  const operaciones = [];
+  const errores = [];
+  const idsArchivo = new Map();
+  const codigosArchivo = new Map();
+
+  filas.forEach((row, index) => {
+    const parsed = normalizarProductoImportacion(row);
+    if (!parsed.id && !parsed.codigo && !parsed.nombre && Object.keys(parsed.data).length === 0) return;
+    if (parsed.id) {
+      if (idsArchivo.has(parsed.id)) {
+        errores.push(`Fila ${index + 2}: id repetido con fila ${idsArchivo.get(parsed.id)}.`);
+        return;
+      }
+      idsArchivo.set(parsed.id, index + 2);
+    }
+    if (parsed.codigo) {
+      if (codigosArchivo.has(parsed.codigo)) {
+        errores.push(`Fila ${index + 2}: codigo ${parsed.codigo} repetido con fila ${codigosArchivo.get(parsed.codigo)}.`);
+        return;
+      }
+      codigosArchivo.set(parsed.codigo, index + 2);
+    }
+
+    let target = parsed.id ? byId.get(parsed.id) : null;
+    const productoPorCodigo = parsed.codigo ? byCode.get(parsed.codigo) : null;
+    if (target && productoPorCodigo && productoPorCodigo.id !== target.id) {
+      errores.push(`Fila ${index + 2}: codigo ${parsed.codigo} ya pertenece a ${productoPorCodigo.nombre}.`);
+      return;
+    }
+    if (!target && productoPorCodigo) target = productoPorCodigo;
+    if (!target && parsed.nombre) target = byNameCat.get(keyNombreCategoria(parsed.nombre, parsed.categoria));
+
+    if (!target && !parsed.nombre) {
+      errores.push(`Fila ${index + 2}: falta nombre para crear producto.`);
+      return;
+    }
+
+    const data = { ...parsed.data };
+    if (target) {
+      if (Object.keys(data).length === 0) return;
+      operaciones.push({ tipo: 'actualizar', id: target.id, data });
+    } else {
+      operaciones.push({
+        tipo: 'crear',
+        id: parsed.id || null,
+        data: {
+          nombre: data.nombre || parsed.nombre,
+          categoria: data.categoria || '',
+          precio_compra: data.precio_compra ?? 0,
+          precio_venta: data.precio_venta ?? 0,
+          stock: data.stock ?? 0,
+          stock_minimo: data.stock_minimo ?? 5,
+          codigo_barras: data.codigo_barras || '',
+          unidad: data.unidad || 'unidades',
+          fecha_creacion: serverTimestamp()
+        }
+      });
+    }
+  });
+
+  if (errores.length > 0) {
+    showMsg('backup-msg', `No se importo: ${errores.slice(0, 3).join(' ')}`, 'error');
+    console.warn('Errores de importacion de productos:', errores);
+    return;
+  }
+
+  const crear = operaciones.filter(op => op.tipo === 'crear').length;
+  const actualizar = operaciones.filter(op => op.tipo === 'actualizar').length;
+  if (operaciones.length === 0) {
+    showMsg('backup-msg', 'No hay cambios para importar.', 'warn');
+    return;
+  }
+  if (!confirm(`Importar ${operaciones.length} producto(s) desde ${origen}? Nuevos: ${crear}. Actualizados: ${actualizar}. No se borrara nada.`)) return;
+
+  let batch = writeBatch(db());
+  let ops = 0;
+  for (const op of operaciones) {
+    const ref = op.tipo === 'crear'
+      ? (op.id ? doc(db(), 'productos', op.id) : doc(collection(db(), 'productos')))
+      : doc(db(), 'productos', op.id);
+    batch.set(ref, op.data, { merge: true });
+    ops++;
+    if (ops >= 450) {
+      await batch.commit();
+      batch = writeBatch(db());
+      ops = 0;
+    }
+  }
+  if (ops > 0) await batch.commit();
+
+  invalidarProductos();
+  productos = await getProductos(true);
+  renderInventarioPaginado();
+  if ($('tab-auditoria')?.classList.contains('active')) loadAuditoria(true);
+  loadDashboard();
+  showMsg('backup-msg', `Productos importados: ${crear} nuevos, ${actualizar} actualizados.`, 'ok');
+}
+
+async function exportarRespaldoJsonCompleto() {
+  showMsg('backup-msg', 'Preparando respaldo JSON completo...', 'ok');
   try {
     const backup = {
       sistema: 'sistemahibrido',
@@ -2310,6 +2669,24 @@ window.exportarRespaldoBaseDatos = async function() {
   } catch (e) {
     console.warn('No se pudo exportar respaldo:', e.message || e);
     showMsg('backup-msg', 'No se pudo exportar el respaldo.', 'error');
+  }
+}
+
+window.exportarRespaldoBaseDatos = async function(formato = 'json') {
+  cerrarBackupMenus();
+  if (formato === 'json') {
+    await exportarRespaldoJsonCompleto();
+    return;
+  }
+  try {
+    showMsg('backup-msg', 'Preparando productos...', 'ok');
+    const filas = await productosParaExportar();
+    if (formato === 'xlsx') descargarExcelProductos(filas);
+    else descargarCsvProductos(filas);
+    showMsg('backup-msg', `Productos exportados: ${filas.length}.`, 'ok');
+  } catch (e) {
+    console.warn('No se pudieron exportar productos:', e.message || e);
+    showMsg('backup-msg', 'No se pudieron exportar los productos.', 'error');
   }
 };
 
@@ -2356,46 +2733,66 @@ async function importarDocsRespaldo(backup) {
   return total;
 }
 
+/* ═══════════════════════════════════════════════════════
+   IMPORTACION RESPALDO
+═══════════════════════════════════════════════════════ */
+async function importarRespaldoJsonCompleto(file) {
+  showMsg('backup-msg', 'Leyendo respaldo...', 'ok');
+  const backup = JSON.parse(await file.text());
+  if (backup?.sistema !== 'sistemahibrido' || !backup.collections) {
+    showMsg('backup-msg', 'El archivo no parece ser un respaldo valido de SistemaHibrido.', 'error');
+    return;
+  }
+
+  const total = contarDocsRespaldo(backup);
+  if (!confirm(`Importar respaldo con ${total} registros? Esto crea o actualiza datos, no borra registros actuales.`)) return;
+
+  showMsg('backup-msg', 'Importando respaldo en Firebase...', 'ok');
+  const importados = await importarDocsRespaldo(backup);
+  invalidarProductos();
+  _anchetasCache = null;
+  _ajustesCache = null;
+  _cierresCache = null;
+  auditoriaIgnoradosCargados = false;
+  invalidarVentasCache();
+  productos = await getProductos(true);
+  anchetas = await getAnchetas(true);
+  renderInventarioPaginado();
+  loadDashboard();
+  showMsg('backup-msg', `Respaldo importado: ${importados} registros.`, 'ok');
+}
+
 window.importarRespaldoBaseDatos = async function(event) {
   const input = event?.target;
   const file = input?.files?.[0];
   if (!file) return;
 
-  showMsg('backup-msg', 'Leyendo respaldo...', 'ok');
+  const formato = detectarFormatoArchivo(file);
   try {
-    const backup = JSON.parse(await file.text());
-    if (backup?.sistema !== 'sistemahibrido' || !backup.collections) {
-      showMsg('backup-msg', 'El archivo no parece ser un respaldo válido de SistemaHibrido.', 'error');
-      return;
+    if (formato === 'json') {
+      const text = await file.text();
+      const json = JSON.parse(text);
+      if (json?.sistema === 'sistemahibrido' && json.collections) {
+        const jsonFile = new File([text], file.name, { type: file.type || 'application/json' });
+        await importarRespaldoJsonCompleto(jsonFile);
+      } else {
+        const filas = Array.isArray(json) ? json : (json.productos || json.items || null);
+        await importarProductosDesdeFilas(filas, 'JSON productos');
+      }
+    } else {
+      showMsg('backup-msg', `Leyendo ${formato === 'xlsx' ? 'Excel' : 'CSV'}...`, 'ok');
+      const filas = await filasDesdeArchivoProductos(file, formato);
+      await importarProductosDesdeFilas(filas, formato === 'xlsx' ? 'Excel' : 'CSV');
     }
-
-    const total = contarDocsRespaldo(backup);
-    if (!confirm(`Importar respaldo con ${total} registros? Esto crea o actualiza datos, no borra registros actuales.`)) return;
-
-    showMsg('backup-msg', 'Importando respaldo en Firebase...', 'ok');
-    const importados = await importarDocsRespaldo(backup);
-    invalidarProductos();
-    _anchetasCache = null;
-    _ajustesCache = null;
-    _cierresCache = null;
-    auditoriaIgnoradosCargados = false;
-    invalidarVentasCache();
-    productos = await getProductos(true);
-    anchetas = await getAnchetas(true);
-    renderInventarioPaginado();
-    loadDashboard();
-    showMsg('backup-msg', `Respaldo importado: ${importados} registros.`, 'ok');
   } catch (e) {
-    console.warn('No se pudo importar respaldo:', e.message || e);
-    showMsg('backup-msg', 'No se pudo importar el respaldo. Revisa que sea JSON válido.', 'error');
+    console.warn('No se pudo importar archivo:', e.message || e);
+    showMsg('backup-msg', 'No se pudo importar el archivo. Revisa el formato.', 'error');
   } finally {
     if (input) input.value = '';
   }
 };
 
-/* ═══════════════════════════════════════════════════════
-   ANCHETAS
-═══════════════════════════════════════════════════════ */
+/* ANCHETAS */
 let editandoAnchetaId = null;
 let itemsAncheta      = [];
 

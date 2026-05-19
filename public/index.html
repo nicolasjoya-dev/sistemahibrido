@@ -587,10 +587,24 @@
     </div>
     <div class="panel form-panel backup-panel" style="max-width:540px">
       <div class="panel-title backup-title">Respaldo de base de datos</div>
-      <p class="backup-help">Exporta un archivo JSON con inventario, ventas, cierres, ajustes, anchetas y etiquetas. La importación crea o actualiza datos, no borra registros que no estén en el archivo.</p>
+      <p class="backup-help">JSON guarda toda la base de datos. Excel y CSV son para productos del inventario. Al importar se crean o actualizan datos, no se borran registros actuales.</p>
       <div class="backup-actions">
-        <button class="btn-secondary" onclick="exportarRespaldoBaseDatos()">Exportar respaldo</button>
-        <label class="btn-secondary backup-file-btn" for="backup-import-file">Importar respaldo</label>
+        <div class="backup-menu-wrap">
+          <button class="btn-secondary" onclick="toggleBackupMenu('export')">Exportar</button>
+          <div id="backup-export-menu" class="backup-menu">
+            <button onclick="exportarRespaldoBaseDatos('json')">JSON completo</button>
+            <button onclick="exportarRespaldoBaseDatos('xlsx')">Excel productos</button>
+            <button onclick="exportarRespaldoBaseDatos('csv')">CSV productos</button>
+          </div>
+        </div>
+        <div class="backup-menu-wrap">
+          <button class="btn-secondary" onclick="toggleBackupMenu('import')">Importar</button>
+          <div id="backup-import-menu" class="backup-menu">
+            <button onclick="prepararImportarRespaldo('json')">JSON completo</button>
+            <button onclick="prepararImportarRespaldo('xlsx')">Excel productos</button>
+            <button onclick="prepararImportarRespaldo('csv')">CSV productos</button>
+          </div>
+        </div>
         <input type="file" id="backup-import-file" accept=".json,application/json" onchange="importarRespaldoBaseDatos(event)"/>
       </div>
       <div id="backup-msg"></div>
@@ -788,6 +802,7 @@
 </div><!-- /#app-screen -->
 
 <script src="/vendor/JsBarcode.all.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="https://unpkg.com/@zxing/browser@0.1.4"></script>
 <script src="https://cdn.jsdelivr.net/npm/@ericblade/quagga2@1.8.4/dist/quagga.min.js"></script>
 <script type="module" src="/js/app.js"></script>

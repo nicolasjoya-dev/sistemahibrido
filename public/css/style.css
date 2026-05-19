@@ -652,6 +652,42 @@ input:focus, select:focus {
   flex-wrap: wrap;
   align-items: center;
 }
+.backup-menu-wrap {
+  position: relative;
+}
+.backup-menu {
+  display: none;
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 30;
+  min-width: 180px;
+  padding: 8px;
+  background: var(--bg2);
+  border: 1px solid var(--border2);
+  border-radius: 8px;
+  box-shadow: 0 16px 36px rgba(0,0,0,0.35);
+}
+.backup-menu.open {
+  display: grid;
+  gap: 6px;
+}
+.backup-menu button {
+  width: 100%;
+  padding: 9px 10px;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  color: var(--text);
+  cursor: pointer;
+  font-family: var(--font-body);
+  font-size: 0.86rem;
+  text-align: left;
+}
+.backup-menu button:hover {
+  background: var(--bg3);
+  color: var(--teal);
+}
 .backup-file-btn {
   display: inline-flex;
   align-items: center;
@@ -1148,6 +1184,17 @@ input:focus, select:focus {
   .barcode-panel-actions select,
   .barcode-panel-actions .btn-secondary {
     width: 100%;
+  }
+  .backup-actions,
+  .backup-menu-wrap,
+  .backup-menu-wrap > .btn-secondary {
+    width: 100%;
+  }
+  .backup-menu {
+    position: static;
+    width: 100%;
+    margin-top: 8px;
+    box-shadow: none;
   }
   .barcode-panel-actions .btn-secondary {
     flex: 1 1 150px;
