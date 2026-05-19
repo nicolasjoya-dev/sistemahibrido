@@ -547,6 +547,10 @@ input:focus, select:focus {
   gap: 10px;
   flex-wrap: wrap;
 }
+.barcode-panel-actions select {
+  min-width: 190px;
+  padding: 8px 12px;
+}
 .barcode-panel-actions .btn-secondary {
   padding: 8px 12px;
 }
@@ -974,6 +978,7 @@ input:focus, select:focus {
     flex: 1 1 160px;
   }
   .barcode-panel-actions,
+  .barcode-panel-actions select,
   .barcode-panel-actions .btn-secondary {
     width: 100%;
   }

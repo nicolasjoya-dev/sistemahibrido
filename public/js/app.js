@@ -234,6 +234,7 @@ let calMes  = new Date().getMonth() + 1;
 // Paginación inventario
 const INV_PAGE_SIZE = 50;
 const COD_BATCH_SIZE = 50;
+const COD_SEQ_DIGITS = 5;
 let invPagina = 0;
 let invFiltro = '';
 let invCodigoFiltro = 'todos';
@@ -795,6 +796,7 @@ window.guardarProducto = async function() {
   productos = _productosCache || [];
   closeModal('modal-producto');
   renderInventarioPaginado();
+  actualizarCategoriasCodigo();
 };
 
 function setScannerMsg(text, type = 'ok') {
@@ -2064,6 +2066,67 @@ function codigosOcupados() {
   return usados;
 }
 
+function categoriaKeyCodigo(categoria) {
+  return String(categoria || '').trim().toLowerCase();
+}
+
+function categoriasCodigoDisponibles() {
+  const mapa = new Map();
+  productos.forEach(p => {
+    const nombre = String(p.categoria || '').trim();
+    const key = categoriaKeyCodigo(nombre);
+    if (key && !mapa.has(key)) mapa.set(key, nombre);
+  });
+  return [...mapa.entries()]
+    .map(([key, nombre]) => ({ key, nombre }))
+    .sort((a, b) => a.nombre.localeCompare(b.nombre));
+}
+
+function categoriaCodigoSeleccionada() {
+  return $('cod-categoria-filtro')?.value || '';
+}
+
+function categoriaCodigoNombre(key = categoriaCodigoSeleccionada()) {
+  if (!key) return 'todas las categorias';
+  const opt = [...($('cod-categoria-filtro')?.options || [])].find(o => o.value === key);
+  return opt?.textContent || key;
+}
+
+function actualizarCategoriasCodigo(preferida = categoriaCodigoSeleccionada()) {
+  const select = $('cod-categoria-filtro');
+  if (!select) return;
+  const categorias = categoriasCodigoDisponibles();
+  select.innerHTML = '<option value="">Todas las categorias</option>' +
+    categorias.map(c => `<option value="${escapeHtml(c.key)}">${escapeHtml(c.nombre)}</option>`).join('');
+  select.value = categorias.some(c => c.key === preferida) ? preferida : '';
+}
+
+window.actualizarResumenCodigoCategoria = function() {
+  const categoria = categoriaCodigoSeleccionada();
+  const total = productos.filter(p => !codigoProductoActual(p) && productoPasaCategoriaCodigo(p, categoria)).length;
+  showMsg('cod-msg', `${total} producto(s) sin codigo en ${categoriaCodigoNombre(categoria)}.`, 'ok');
+};
+
+function productoPasaCategoriaCodigo(p, categoriaKey) {
+  return !categoriaKey || categoriaKeyCodigo(p.categoria) === categoriaKey;
+}
+
+function siguienteCodigoSecuencial(usados = codigosOcupados()) {
+  let mayor = 0;
+  usados.forEach(codigo => {
+    const limpio = limpiarCodigo(codigo);
+    if (/^\d{5,6}$/.test(limpio)) mayor = Math.max(mayor, parseInt(limpio, 10) || 0);
+  });
+
+  let n = mayor + 1;
+  let codigo = '';
+  do {
+    codigo = String(n).padStart(COD_SEQ_DIGITS, '0');
+    n++;
+  } while (productoConCodigo(codigo) || usados.has(codigo));
+  return codigo;
+}
+
 function codigoUsadoEnOtraEtiqueta(codigo, productoId) {
   const buscado = limpiarCodigo(codigo);
   if (!buscado) return false;
@@ -2088,11 +2151,7 @@ function datosEtiquetaCodigo(p, codigo) {
 }
 
 function crearCodigoUnico(usados = codigosOcupados()) {
-  let codigo = '';
-  do {
-    codigo = `20${Math.floor(Math.random() * 1000000).toString().padStart(6, '0')}`;
-  } while (productoConCodigo(codigo) || usados.has(codigo));
-  return codigo;
+  return siguienteCodigoSecuencial(usados);
 }
 
 function actualizarCodigoLocal(productoId, codigo) {
@@ -2136,6 +2195,7 @@ function renderCodigosBarras() {
   const p = productoCodigoSeleccionado();
   if ($('cod-producto-nombre')) $('cod-producto-nombre').value = p ? p.nombre : '';
   if ($('cod-valor') && p && !$('cod-valor').value) $('cod-valor').value = codigoProductoActual(p);
+  actualizarCategoriasCodigo();
   actualizarPreviewCodigo();
   renderEtiquetasCodigo();
   cargarEtiquetasCodigo();
@@ -2189,9 +2249,26 @@ window.actualizarPreviewCodigo = function() {
   renderSvgCodigo('cod-preview-svg', codigo);
 };
 
-window.generarCodigoProducto = function() {
+window.generarCodigoProducto = async function() {
   if (!codigoProductoId) {
     showMsg('cod-msg', 'Selecciona un producto antes de generar el código.', 'error');
+    return;
+  }
+  showMsg('cod-msg', 'Revisando codigos existentes...', 'ok');
+  try {
+    const [prods] = await Promise.all([
+      getProductos(true),
+      cargarEtiquetasCodigo(true)
+    ]);
+    productos = prods;
+    actualizarCategoriasCodigo();
+  } catch (e) {
+    console.warn('No se pudieron revisar codigos antes de generar:', e.message || e);
+    showMsg('cod-msg', 'No se pudo revisar Firebase antes de generar.', 'error');
+    return;
+  }
+  if (!productoCodigoSeleccionado()) {
+    showMsg('cod-msg', 'El producto seleccionado ya no existe.', 'error');
     return;
   }
   $('cod-valor').value = crearCodigoUnico();
@@ -2217,6 +2294,10 @@ window.guardarCodigoProducto = async function() {
     showMsg('cod-msg', `Ese código ya está en ${repetido.nombre}.`, 'error');
     return;
   }
+  if (codigoUsadoEnOtraEtiqueta(codigo, p.id)) {
+    showMsg('cod-msg', 'Ese código ya está en etiquetas pendientes de otro producto.', 'error');
+    return;
+  }
 
   await updateDoc(doc(db(), 'productos', p.id), { codigo_barras: codigo });
   actualizarCodigoLocal(p.id, codigo);
@@ -2239,6 +2320,10 @@ window.agregarEtiquetaCodigo = async function() {
 
   if (productoConCodigo(codigo, p.id)) {
     showMsg('cod-msg', 'Ese código ya está asignado a otro producto.', 'error');
+    return;
+  }
+  if (codigoUsadoEnOtraEtiqueta(codigo, p.id)) {
+    showMsg('cod-msg', 'Ese código ya está en etiquetas pendientes de otro producto.', 'error');
     return;
   }
 
@@ -2315,6 +2400,8 @@ window.actualizarEtiquetasCodigo = async function() {
 };
 
 async function prepararCodigosFaltantes() {
+  const categoriaKey = categoriaCodigoSeleccionada();
+  const categoriaNombre = categoriaCodigoNombre(categoriaKey);
   showMsg('cod-msg', 'Revisando Firebase antes de generar...', 'ok');
   try {
     const [prods] = await Promise.all([
@@ -2322,7 +2409,12 @@ async function prepararCodigosFaltantes() {
       cargarEtiquetasCodigo(true)
     ]);
     productos = prods;
-    return productos.filter(p => !codigoProductoActual(p));
+    actualizarCategoriasCodigo(categoriaKey);
+    return {
+      faltantes: productos.filter(p => !codigoProductoActual(p) && productoPasaCategoriaCodigo(p, categoriaKey)),
+      categoriaKey,
+      categoriaNombre
+    };
   } catch (e) {
     console.warn('No se pudieron revisar productos para codigos:', e.message || e);
     showMsg('cod-msg', 'No se pudo revisar Firebase antes de generar codigos.', 'error');
@@ -2336,33 +2428,29 @@ async function procesarLoteCodigosFaltantes(lote) {
   const usados = codigosOcupados();
   const batch = writeBatch(db());
   const nuevasEtiquetas = [];
+  const etiquetasActualizadas = [];
   const actualizados = [];
 
   lote.forEach(p => {
-    const etiquetasExistentes = etiquetasPendientesDeProducto(p.id)
-      .filter(item => {
-        const codigo = limpiarCodigo(item.codigo);
-        return codigo && !productoConCodigo(codigo, p.id) && !codigoUsadoEnOtraEtiqueta(codigo, p.id);
-      });
+    const codigo = crearCodigoUnico(usados);
+    const etiqueta = datosEtiquetaCodigo(p, codigo);
+    const etiquetasExistentes = etiquetasPendientesDeProducto(p.id);
+    let actualizoExistente = false;
 
-    let codigo = limpiarCodigo(etiquetasExistentes[0]?.codigo);
-    if (!codigo) {
-      codigo = crearCodigoUnico(usados);
+    etiquetasExistentes.forEach(item => {
+      if (!item.id) return;
+      batch.set(doc(db(), 'etiquetas_codigos', item.id), {
+        ...etiqueta,
+        actualizado: serverTimestamp()
+      }, { merge: true });
+      etiquetasActualizadas.push({ id: item.id, ...etiqueta });
+      actualizoExistente = true;
+    });
+
+    if (!actualizoExistente) {
       const ref = doc(etiquetasCodigoRef());
-      const etiqueta = datosEtiquetaCodigo(p, codigo);
       batch.set(ref, { ...etiqueta, creado: serverTimestamp() });
       nuevasEtiquetas.push({ id: ref.id, ...etiqueta });
-    } else {
-      etiquetasExistentes
-        .filter(item => limpiarCodigo(item.codigo) === codigo && item.id)
-        .forEach(item => {
-          batch.set(doc(db(), 'etiquetas_codigos', item.id), {
-            nombre: p.nombre,
-            precio_venta: p.precio_venta || 0,
-            guardado_en_producto: true,
-            actualizado: serverTimestamp()
-          }, { merge: true });
-        });
     }
 
     usados.add(codigo);
@@ -2374,10 +2462,9 @@ async function procesarLoteCodigosFaltantes(lote) {
 
   actualizados.forEach(item => actualizarCodigoLocal(item.productoId, item.codigo));
   etiquetasCodigo = etiquetasCodigo.map(item => {
-    const actualizado = actualizados.find(p =>
-      p.productoId === item.producto_id && limpiarCodigo(item.codigo) === p.codigo);
+    const actualizado = etiquetasActualizadas.find(et => et.id === item.id);
     return actualizado
-      ? { ...item, nombre: actualizado.nombre, precio_venta: actualizado.precio_venta, guardado_en_producto: true }
+      ? { ...item, ...actualizado, guardado_en_producto: true }
       : item;
   });
   etiquetasCodigo.push(...nuevasEtiquetas);
@@ -2390,21 +2477,23 @@ async function procesarLoteCodigosFaltantes(lote) {
 }
 
 window.generarLoteCodigosFaltantes = async function() {
-  const faltantes = await prepararCodigosFaltantes();
-  if (!faltantes) return;
+  const prep = await prepararCodigosFaltantes();
+  if (!prep) return;
+  const { faltantes, categoriaKey, categoriaNombre } = prep;
+  const alcance = categoriaKey ? ` en ${categoriaNombre}` : '';
   if (faltantes.length === 0) {
-    showMsg('cod-msg', 'No hay productos sin codigo de barras.', 'ok');
+    showMsg('cod-msg', `No hay productos sin codigo de barras${alcance}.`, 'ok');
     return;
   }
 
   const lote = faltantes.slice(0, COD_BATCH_SIZE);
   const escrituras = lote.length * 2;
-  if (!confirm(`Generar codigos para ${lote.length} producto(s) sin codigo? Se guardan en el producto y se agregan a etiquetas pendientes. Aproximado: ${escrituras} escrituras.`)) return;
+  if (!confirm(`Generar codigos secuenciales para ${lote.length} producto(s) sin codigo${alcance}? Se valida contra todas las categorias y etiquetas pendientes. Aproximado: ${escrituras} escrituras.`)) return;
 
   try {
     const r = await procesarLoteCodigosFaltantes(lote);
     const quedan = Math.max(0, faltantes.length - r.procesados);
-    showMsg('cod-msg', `Lote listo: ${r.procesados} producto(s). Quedan ${quedan} sin codigo.`, 'ok');
+    showMsg('cod-msg', `Lote listo: ${r.procesados} producto(s). Quedan ${quedan} sin codigo${alcance}.`, 'ok');
   } catch (e) {
     console.warn('No se pudo generar lote de codigos:', e.message || e);
     showMsg('cod-msg', 'No se pudo guardar el lote en Firebase.', 'error');
@@ -2416,16 +2505,18 @@ function pausa(ms) {
 }
 
 window.generarTodosCodigosFaltantes = async function() {
-  const faltantes = await prepararCodigosFaltantes();
-  if (!faltantes) return;
+  const prep = await prepararCodigosFaltantes();
+  if (!prep) return;
+  const { faltantes, categoriaKey, categoriaNombre } = prep;
+  const alcance = categoriaKey ? ` en ${categoriaNombre}` : '';
   if (faltantes.length === 0) {
-    showMsg('cod-msg', 'No hay productos sin codigo de barras.', 'ok');
+    showMsg('cod-msg', `No hay productos sin codigo de barras${alcance}.`, 'ok');
     return;
   }
 
   const lotes = Math.ceil(faltantes.length / COD_BATCH_SIZE);
   const escrituras = faltantes.length * 2;
-  if (!confirm(`Generar codigos para TODOS los ${faltantes.length} producto(s) sin codigo, en ${lotes} lote(s) de ${COD_BATCH_SIZE}? Se guardan en inventario y quedan listos para imprimir. Aproximado: ${escrituras} escrituras.`)) return;
+  if (!confirm(`Generar codigos secuenciales para TODOS los ${faltantes.length} producto(s) sin codigo${alcance}, en ${lotes} lote(s) de ${COD_BATCH_SIZE}? Se valida contra todas las categorias y etiquetas pendientes. Aproximado: ${escrituras} escrituras.`)) return;
 
   let procesados = 0;
   try {
@@ -2433,10 +2524,10 @@ window.generarTodosCodigosFaltantes = async function() {
       const lote = faltantes.slice(i, i + COD_BATCH_SIZE);
       const r = await procesarLoteCodigosFaltantes(lote);
       procesados += r.procesados;
-      showMsg('cod-msg', `Generando codigos: ${procesados}/${faltantes.length}`, 'ok');
+      showMsg('cod-msg', `Generando codigos${alcance}: ${procesados}/${faltantes.length}`, 'ok');
       await pausa(250);
     }
-    showMsg('cod-msg', `Listo: ${procesados} producto(s) con codigo y etiqueta pendiente.`, 'ok');
+    showMsg('cod-msg', `Listo: ${procesados} producto(s) con codigo y etiqueta pendiente${alcance}.`, 'ok');
   } catch (e) {
     console.warn('No se pudieron generar todos los codigos:', e.message || e);
     showMsg('cod-msg', `Se detuvo el proceso. Guardados antes del error: ${procesados}.`, 'error');
@@ -2625,6 +2716,7 @@ window.initApp = async function() {
 
   // Carga paralela única al arrancar
   [productos, anchetas] = await Promise.all([getProductos(), getAnchetas()]);
+  actualizarCategoriasCodigo();
 
   // Dashboard usa los mismos datos + ventas hoy (query fresca)
   loadDashboard();

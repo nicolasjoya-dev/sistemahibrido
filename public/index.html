@@ -342,6 +342,9 @@
       <div class="panel-title barcode-panel-title">
         <span>Etiquetas pendientes</span>
         <div class="barcode-panel-actions">
+          <select id="cod-categoria-filtro" onchange="actualizarResumenCodigoCategoria()">
+            <option value="">Todas las categorías</option>
+          </select>
           <button class="btn-secondary" onclick="generarLoteCodigosFaltantes()">Generar lote 50</button>
           <button class="btn-secondary" onclick="generarTodosCodigosFaltantes()">Generar todos</button>
         </div>
