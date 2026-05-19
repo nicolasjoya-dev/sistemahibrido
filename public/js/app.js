@@ -49,6 +49,8 @@ let _productosCargadoEn = 0;
 const CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutos
 const VENTAS_CACHE_TTL_MS = 5 * 60 * 1000; // evita re-leer al navegar entre tabs
 const DASH_VENTAS_LIMIT = 20;
+const AUDITORIA_PRECIO_COMPRA_ALTO = 50000;
+const AUDITORIA_VALOR_COMPRA_ALTO = 1000000;
 const _ventasFechaCache = new Map();
 const _ventasRangoCache = new Map();
 const _ventasRecientesCache = new Map();
@@ -238,6 +240,9 @@ const COD_SEQ_DIGITS = 5;
 let invPagina = 0;
 let invFiltro = '';
 let invCodigoFiltro = 'todos';
+let auditoriaIgnorados = new Map();
+let auditoriaIgnoradosCargados = false;
+let auditoriaIssuesActuales = new Map();
 
 // ── Connection status ─────────────────────────────────
 function updateConnStatus() {
@@ -283,6 +288,7 @@ window.switchTab = function(name, el) {
   if (name === 'ajustes')    loadAjustes();
   if (name === 'anchetas')   renderAnchetas();             // usa caché
   if (name === 'codigos')    renderCodigosBarras();
+  if (name === 'auditoria')  loadAuditoria();
 };
 
 // ── Messages ──────────────────────────────────────────
@@ -712,6 +718,282 @@ window.filtrarInventario = function() {
 };
 
 /* ═══════════════════════════════════════════════════════
+   CENTRO DE AUDITORIA
+═══════════════════════════════════════════════════════ */
+function auditoriaIgnoradosRef() {
+  return collection(db(), 'auditoria_ignorados');
+}
+
+function numeroSeguro(value) {
+  const n = parseFloat(value);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function hashAuditoria(value) {
+  const texto = String(value || '');
+  let hash = 5381;
+  for (let i = 0; i < texto.length; i++) hash = ((hash << 5) + hash) ^ texto.charCodeAt(i);
+  return (hash >>> 0).toString(36);
+}
+
+function crearIssueAuditoria(tipo, producto, etiqueta, detalle, metrica, severidad, extra = '') {
+  const firma = JSON.stringify([
+    tipo,
+    producto?.id || '',
+    limpiarCodigo(producto?.codigo_barras || ''),
+    numeroSeguro(producto?.stock),
+    numeroSeguro(producto?.precio_compra),
+    numeroSeguro(producto?.precio_venta),
+    extra
+  ]);
+  const issueId = `${tipo}_${hashAuditoria(producto?.id || extra)}_${hashAuditoria(firma)}`;
+  return {
+    id: issueId,
+    tipo,
+    productoId: producto?.id || '',
+    nombre: producto?.nombre || 'Producto sin nombre',
+    categoria: producto?.categoria || '',
+    etiqueta,
+    detalle,
+    metrica,
+    severidad,
+    firma
+  };
+}
+
+async function cargarAuditoriaIgnorados(forzar = false) {
+  if (auditoriaIgnoradosCargados && !forzar) return auditoriaIgnorados;
+  try {
+    const snap = await getDocs(auditoriaIgnoradosRef());
+    auditoriaIgnorados = new Map(snap.docs.map(d => [d.id, { id: d.id, ...d.data() }]));
+    auditoriaIgnoradosCargados = true;
+  } catch (e) {
+    auditoriaIgnorados = new Map();
+    auditoriaIgnoradosCargados = true;
+    console.warn('No se pudieron cargar auditorias ignoradas:', e.message || e);
+  }
+  return auditoriaIgnorados;
+}
+
+function productosConCodigoAuditoria() {
+  return productos.filter(p => limpiarCodigo(p.codigo_barras || ''));
+}
+
+function calcularAuditoria() {
+  const conCodigo = productosConCodigoAuditoria().length;
+  const sinCodigo = Math.max(0, productos.length - conCodigo);
+  const porCodigo = new Map();
+
+  productos.forEach(p => {
+    const codigo = limpiarCodigo(p.codigo_barras || '');
+    if (!codigo) return;
+    if (!porCodigo.has(codigo)) porCodigo.set(codigo, []);
+    porCodigo.get(codigo).push(p);
+  });
+
+  const gruposDuplicados = [...porCodigo.entries()].filter(([, lista]) => lista.length > 1);
+  const duplicados = [];
+  gruposDuplicados.forEach(([codigo, lista]) => {
+    const idsGrupo = lista.map(p => p.id).sort().join('|');
+    lista.forEach(p => {
+      const otros = lista
+        .filter(x => x.id !== p.id)
+        .map(x => x.nombre)
+        .join(', ');
+      duplicados.push(crearIssueAuditoria(
+        'codigo_duplicado',
+        p,
+        'Codigo duplicado',
+        `Codigo ${codigo} tambien aparece en: ${otros || 'otro producto'}`,
+        codigo,
+        'danger',
+        `${codigo}|${idsGrupo}`
+      ));
+    });
+  });
+
+  const altos = productos
+    .map(p => {
+      const compra = numeroSeguro(p.precio_compra);
+      const venta = numeroSeguro(p.precio_venta);
+      const stock = numeroSeguro(p.stock);
+      const valor = stock * compra;
+      return { p, compra, venta, stock, valor };
+    })
+    .filter(x => x.compra >= AUDITORIA_PRECIO_COMPRA_ALTO || x.valor >= AUDITORIA_VALOR_COMPRA_ALTO)
+    .sort((a, b) => b.valor - a.valor)
+    .map(x => {
+      const razones = [];
+      if (x.compra >= AUDITORIA_PRECIO_COMPRA_ALTO) razones.push(`Compra ${fmtCOP(x.compra)}`);
+      if (x.valor >= AUDITORIA_VALOR_COMPRA_ALTO) razones.push(`Valor ${fmtCOP(x.valor)}`);
+      return crearIssueAuditoria(
+        'valor_alto',
+        x.p,
+        'Compra alta',
+        `${razones.join(' · ')} · Stock ${fmt(x.stock)} · Venta ${fmtCOP(x.venta)}`,
+        fmtCOP(x.valor),
+        'warning',
+        `${x.compra}|${x.stock}|${x.valor}`
+      );
+    });
+
+  const pendientes = productos
+    .map(p => ({
+      p,
+      compra: numeroSeguro(p.precio_compra),
+      venta: numeroSeguro(p.precio_venta),
+      stock: numeroSeguro(p.stock)
+    }))
+    .filter(x => (x.venta > 0 && x.venta <= 10) || (x.compra > 0 && x.venta > 0 && x.venta < x.compra))
+    .sort((a, b) => (b.compra - b.venta) - (a.compra - a.venta))
+    .map(x => {
+      const motivo = x.venta <= 10 ? 'Venta marcada en $10' : 'Venta menor que compra';
+      return crearIssueAuditoria(
+        'venta_pendiente',
+        x.p,
+        motivo,
+        `Compra ${fmtCOP(x.compra)} · Venta ${fmtCOP(x.venta)} · Stock ${fmt(x.stock)}`,
+        fmtCOP(x.venta),
+        'info',
+        `${x.compra}|${x.venta}|${x.stock}`
+      );
+    });
+
+  const visibles = lista => lista.filter(issue => !auditoriaIgnorados.has(issue.id));
+  return {
+    stats: {
+      total: productos.length,
+      conCodigo,
+      sinCodigo,
+      pctCodigo: productos.length ? Math.round((conCodigo / productos.length) * 100) : 0,
+      codigosDuplicados: gruposDuplicados.length
+    },
+    duplicados: visibles(duplicados),
+    altos: visibles(altos),
+    pendientes: visibles(pendientes)
+  };
+}
+
+function setTextAuditoria(id, value) {
+  const el = $(id);
+  if (el) el.textContent = value;
+}
+
+function renderAuditoriaLista(id, issues) {
+  const cont = $(id);
+  if (!cont) return;
+  if (issues.length === 0) {
+    cont.innerHTML = '<div class="empty audit-empty">Sin productos por revisar</div>';
+    return;
+  }
+
+  cont.innerHTML = issues.map(issue => `
+    <div class="audit-item ${issue.severidad}">
+      <div class="audit-main">
+        <div class="audit-kicker">${escapeHtml(issue.etiqueta)}</div>
+        <div class="audit-name">${escapeHtml(issue.nombre)}</div>
+        <div class="audit-detail">${escapeHtml(issue.detalle)}</div>
+      </div>
+      <div class="audit-meta">
+        <span>${escapeHtml(issue.categoria || 'Sin categoria')}</span>
+        <strong>${escapeHtml(issue.metrica)}</strong>
+      </div>
+      <div class="audit-actions">
+        <button class="btn-icon" onclick="openModalProducto('${escapeJsString(issue.productoId)}')">Editar</button>
+        <button class="btn-icon" onclick="ignorarAuditoria('${escapeJsString(issue.id)}')">Esta bien</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+function renderAuditoria(resultado) {
+  const todosIssues = [...resultado.duplicados, ...resultado.altos, ...resultado.pendientes];
+  auditoriaIssuesActuales = new Map(todosIssues.map(issue => [issue.id, issue]));
+
+  setTextAuditoria('aud-progreso', `${resultado.stats.pctCodigo}%`);
+  setTextAuditoria('aud-progreso-detalle', `${resultado.stats.conCodigo} con codigo / ${resultado.stats.total} productos`);
+  setTextAuditoria('aud-duplicados-stat', resultado.stats.codigosDuplicados);
+  setTextAuditoria('aud-altos-stat', resultado.altos.length);
+  setTextAuditoria('aud-pendientes-stat', resultado.pendientes.length);
+  setTextAuditoria('aud-duplicados-count', `${resultado.duplicados.length} productos`);
+  setTextAuditoria('aud-altos-count', `${resultado.altos.length} productos`);
+  setTextAuditoria('aud-pendientes-count', `${resultado.pendientes.length} productos`);
+
+  const barra = $('aud-progreso-barra');
+  if (barra) barra.style.width = `${resultado.stats.pctCodigo}%`;
+
+  renderAuditoriaLista('aud-duplicados-list', resultado.duplicados);
+  renderAuditoriaLista('aud-altos-list', resultado.altos);
+  renderAuditoriaLista('aud-pendientes-list', resultado.pendientes);
+}
+
+window.loadAuditoria = async function(forzar = false) {
+  showMsg('aud-msg', 'Revisando inventario...', 'ok');
+  try {
+    productos = await getProductos(forzar);
+    await cargarAuditoriaIgnorados(forzar);
+    renderAuditoria(calcularAuditoria());
+    showMsg('aud-msg', 'Auditoria actualizada.', 'ok');
+  } catch (e) {
+    console.warn('No se pudo cargar auditoria:', e.message || e);
+    showMsg('aud-msg', 'No se pudo cargar el centro de auditoria.', 'error');
+  }
+};
+
+window.ignorarAuditoria = async function(issueId) {
+  const issue = auditoriaIssuesActuales.get(issueId);
+  if (!issue) return;
+  try {
+    await setDoc(doc(db(), 'auditoria_ignorados', issue.id), {
+      tipo: issue.tipo,
+      producto_id: issue.productoId,
+      producto_nombre: issue.nombre,
+      firma: issue.firma,
+      detalle: issue.detalle,
+      actualizado: serverTimestamp()
+    }, { merge: true });
+    auditoriaIgnorados.set(issue.id, issue);
+    renderAuditoria(calcularAuditoria());
+    showMsg('aud-msg', 'Producto ocultado de auditoria.', 'ok');
+  } catch (e) {
+    console.warn('No se pudo ocultar auditoria:', e.message || e);
+    showMsg('aud-msg', 'No se pudo guardar este aviso como revisado.', 'error');
+  }
+};
+
+window.restaurarAuditoriaIgnorados = async function() {
+  await cargarAuditoriaIgnorados(true);
+  const ids = [...auditoriaIgnorados.keys()];
+  if (ids.length === 0) {
+    showMsg('aud-msg', 'No hay avisos ocultos.', 'warn');
+    return;
+  }
+  if (!confirm(`Restaurar ${ids.length} aviso(s) oculto(s) de auditoria?`)) return;
+
+  try {
+    let batch = writeBatch(db());
+    let ops = 0;
+    for (const id of ids) {
+      batch.delete(doc(db(), 'auditoria_ignorados', id));
+      ops++;
+      if (ops >= 450) {
+        await batch.commit();
+        batch = writeBatch(db());
+        ops = 0;
+      }
+    }
+    if (ops > 0) await batch.commit();
+    auditoriaIgnorados.clear();
+    auditoriaIgnoradosCargados = true;
+    renderAuditoria(calcularAuditoria());
+    showMsg('aud-msg', 'Avisos ocultos restaurados.', 'ok');
+  } catch (e) {
+    console.warn('No se pudieron restaurar auditorias:', e.message || e);
+    showMsg('aud-msg', 'No se pudieron restaurar los avisos ocultos.', 'error');
+  }
+};
+
+/* ═══════════════════════════════════════════════════════
    MODAL PRODUCTO
 ═══════════════════════════════════════════════════════ */
 window.openModalProducto = function(id) {
@@ -808,6 +1090,7 @@ window.guardarProducto = async function() {
   closeModal('modal-producto');
   renderInventarioPaginado();
   actualizarCategoriasCodigo();
+  if ($('tab-auditoria')?.classList.contains('active')) loadAuditoria(true);
 };
 
 function setScannerMsg(text, type = 'ok') {
@@ -1229,6 +1512,7 @@ window.eliminarProducto = async function(id) {
   productos = _productosCache || [];
   showMsg('inv-msg', 'Producto eliminado.', 'warn');
   renderInventarioPaginado();
+  if ($('tab-auditoria')?.classList.contains('active')) loadAuditoria(true);
 };
 
 /* ═══════════════════════════════════════════════════════
@@ -1926,7 +2210,8 @@ const BACKUP_COLLECTIONS = [
   'resumenes_diarios',
   'cierres',
   'ajustes',
-  'etiquetas_codigos'
+  'etiquetas_codigos',
+  'auditoria_ignorados'
 ];
 const BACKUP_PRODUCT_SUBCOLLECTIONS = ['entradas'];
 
@@ -2089,10 +2374,11 @@ window.importarRespaldoBaseDatos = async function(event) {
 
     showMsg('backup-msg', 'Importando respaldo en Firebase...', 'ok');
     const importados = await importarDocsRespaldo(backup);
-    invalidarProductosCache();
+    invalidarProductos();
     _anchetasCache = null;
     _ajustesCache = null;
     _cierresCache = null;
+    auditoriaIgnoradosCargados = false;
     invalidarVentasCache();
     productos = await getProductos(true);
     anchetas = await getAnchetas(true);

@@ -164,6 +164,110 @@ body {
 }
 .form-panel { padding: 28px 30px; }
 
+/* Auditoria */
+.audit-header-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.audit-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 14px;
+  margin-bottom: 22px;
+}
+.audit-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.audit-count {
+  color: var(--muted);
+  font-family: var(--font-body);
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+.audit-progress-panel {
+  padding-bottom: 18px;
+}
+.audit-progress-track {
+  height: 10px;
+  margin: 18px 20px 0;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.audit-progress-fill {
+  width: 0;
+  height: 100%;
+  background: linear-gradient(90deg, var(--teal), var(--blue));
+  transition: width 0.2s ease;
+}
+.audit-list {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+}
+.audit-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(150px, 190px) auto;
+  align-items: center;
+  gap: 14px;
+  padding: 14px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--border2);
+  border-radius: 8px;
+}
+.audit-item.danger { border-left-color: var(--red); }
+.audit-item.warning { border-left-color: var(--amber); }
+.audit-item.info { border-left-color: var(--blue); }
+.audit-main { min-width: 0; }
+.audit-kicker {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.audit-name {
+  margin-top: 3px;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+.audit-detail {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+.audit-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+.audit-meta strong {
+  color: var(--text);
+  font-family: var(--font-head);
+  font-size: 1rem;
+}
+.audit-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.audit-empty {
+  margin: 0;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+}
+
 /* ── Table ───────────────────────────────────────────────────── */
 .data-table {
   width: 100%;
@@ -960,6 +1064,39 @@ input:focus, select:focus {
   .empty {
     padding: 28px 16px;
   }
+  .audit-header-actions,
+  .audit-header-actions .btn-secondary {
+    width: 100%;
+  }
+  .audit-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+  .audit-title {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .audit-list {
+    padding: 12px;
+  }
+  .audit-item {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+    gap: 10px;
+  }
+  .audit-meta {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+  .audit-actions {
+    justify-content: stretch;
+  }
+  .audit-actions .btn-icon {
+    flex: 1 1 120px;
+  }
 
   #tab-ventas > div[style*="grid"] {
     display: block !important;
@@ -1063,6 +1200,7 @@ input:focus, select:focus {
   .mobile-topbar { padding-left: 10px; padding-right: 10px; }
   .sidebar { width: min(88vw, 300px); }
   .stats-grid { gap: 8px; }
+  .audit-summary-grid { gap: 8px; }
   .stat-card { padding: 11px; }
   .stat-val { font-size: 1rem; }
   .stat-icon {
@@ -1071,6 +1209,7 @@ input:focus, select:focus {
   }
   .data-table { min-width: 620px; }
   .panel-title { padding: 13px 14px; }
+  .audit-item { padding: 12px; }
 }
 /* Fix: sugerencias de venta no se corten */
 #tab-ventas .panel {

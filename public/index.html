@@ -189,6 +189,9 @@
       <span class="nav-icon">▦</span><span>Inventario</span>
 
     </a>
+    <a class="nav-item" data-tab="auditoria" onclick="switchTab('auditoria',this)">
+      <span class="nav-icon">!</span><span>Auditoria</span>
+    </a>
     <a class="nav-item" data-tab="anchetas" onclick="switchTab('anchetas',this)">
       <span class="nav-icon">🎁</span><span>Anchetas</span>
     </a>
@@ -269,6 +272,50 @@
         <tbody id="inv-body"></tbody>
       </table>
       <div id="inv-paginacion"></div>  <!-- ← agregar esta línea -->
+    </div>
+  </div>
+  <div id="tab-auditoria" class="tab">
+    <div class="page-header">
+      <div><h1>Centro de Auditoria</h1><p class="page-sub">Revision de datos del inventario</p></div>
+      <div class="audit-header-actions">
+        <button class="btn-secondary" onclick="loadAuditoria(true)">Actualizar</button>
+        <button class="btn-secondary" onclick="restaurarAuditoriaIgnorados()">Restaurar ocultos</button>
+      </div>
+    </div>
+    <div id="aud-msg"></div>
+    <div class="audit-summary-grid">
+      <div class="stat-card"><div class="stat-icon teal">%</div><div class="stat-data"><span class="stat-val" id="aud-progreso">---</span><span class="stat-label">Con codigo</span></div></div>
+      <div class="stat-card"><div class="stat-icon amber">!</div><div class="stat-data"><span class="stat-val" id="aud-duplicados-stat">---</span><span class="stat-label">Codigos duplicados</span></div></div>
+      <div class="stat-card"><div class="stat-icon amber">$</div><div class="stat-data"><span class="stat-val" id="aud-altos-stat">---</span><span class="stat-label">Compra alta</span></div></div>
+      <div class="stat-card"><div class="stat-icon blue">$</div><div class="stat-data"><span class="stat-val" id="aud-pendientes-stat">---</span><span class="stat-label">Venta pendiente</span></div></div>
+    </div>
+    <div class="panel audit-progress-panel">
+      <div class="panel-title audit-title">
+        <span>Progreso de codigos</span>
+        <span id="aud-progreso-detalle" class="audit-count">---</span>
+      </div>
+      <div class="audit-progress-track"><div id="aud-progreso-barra" class="audit-progress-fill"></div></div>
+    </div>
+    <div class="panel audit-panel">
+      <div class="panel-title audit-title">
+        <span>Codigos duplicados</span>
+        <span id="aud-duplicados-count" class="audit-count">0</span>
+      </div>
+      <div id="aud-duplicados-list" class="audit-list"></div>
+    </div>
+    <div class="panel audit-panel">
+      <div class="panel-title audit-title">
+        <span>Compra o valor muy alto</span>
+        <span id="aud-altos-count" class="audit-count">0</span>
+      </div>
+      <div id="aud-altos-list" class="audit-list"></div>
+    </div>
+    <div class="panel audit-panel">
+      <div class="panel-title audit-title">
+        <span>Precio de venta pendiente</span>
+        <span id="aud-pendientes-count" class="audit-count">0</span>
+      </div>
+      <div id="aud-pendientes-list" class="audit-list"></div>
     </div>
   </div>
    <div id="tab-anchetas" class="tab">
