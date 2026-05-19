@@ -2090,9 +2090,7 @@ function datosEtiquetaCodigo(p, codigo) {
 function crearCodigoUnico(usados = codigosOcupados()) {
   let codigo = '';
   do {
-    const tiempo = Date.now().toString(36).toUpperCase();
-    const azar = Math.random().toString(36).slice(2, 5).toUpperCase().padEnd(3, '0');
-    codigo = `SH${tiempo}${azar}`;
+    codigo = `20${Math.floor(Math.random() * 1000000).toString().padStart(6, '0')}`;
   } while (productoConCodigo(codigo) || usados.has(codigo));
   return codigo;
 }
@@ -2593,7 +2591,7 @@ window.imprimirEtiquetasCodigo = function() {
 
   const sheet = $('cod-print-sheet');
   sheet.innerHTML = etiquetasCodigo.map((item, i) => etiquetaCodigoHtml(item, i, 'print')).join('');
-  etiquetasCodigo.forEach((item, i) => renderSvgCodigo(`cod-print-svg-${i}`, item.codigo, { width: 1, height: 48, margin: 1 }));
+  etiquetasCodigo.forEach((item, i) => renderSvgCodigo(`cod-print-svg-${i}`, item.codigo, { width: 1.35, height: 50, margin: 0 }));
 
   document.body.classList.add('print-barcodes');
   setTimeout(() => window.print(), 120);
