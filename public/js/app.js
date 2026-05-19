@@ -10,7 +10,7 @@
 import {
   collection, doc, getDocs, getDoc, addDoc, setDoc,
   updateDoc, deleteDoc, query, where, orderBy,
-  serverTimestamp, limit, runTransaction, writeBatch, increment, onSnapshot
+  serverTimestamp, limit, runTransaction, writeBatch, increment, onSnapshot, Timestamp
 } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
 
 function db() { return window.__db; }
@@ -765,10 +765,21 @@ window.calcMargen = function() {
 window.guardarProducto = async function() {
   const nombre       = $('p-nombre').value.trim();
   const precio_venta = parseFloat($('p-venta').value);
+  const codigoBarras = limpiarCodigo($('p-barras').value.trim() || '');
   if (!nombre || isNaN(precio_venta)) {
     showMsg('modal-msg', 'Nombre y precio de venta son obligatorios.', 'error');
     return;
   }
+
+  if (codigoBarras) {
+    showMsg('modal-msg', 'Revisando código de barras...', 'ok');
+    const repetido = await productoDuplicadoPorCodigoFirebase(codigoBarras, editandoProductoId);
+    if (repetido) {
+      showMsg('modal-msg', `Ese código ya está asignado a: ${escapeHtml(repetido.nombre || 'otro producto')}.`, 'error');
+      return;
+    }
+  }
+
   const data = {
     nombre,
     categoria:     $('p-categoria').value.trim() || '',
@@ -776,7 +787,7 @@ window.guardarProducto = async function() {
     precio_venta,
     stock:         parseFloat($('p-stock').value) || 0,
     stock_minimo:  parseFloat($('p-stockmin').value) || 5,
-    codigo_barras: $('p-barras').value.trim() || '',
+    codigo_barras: codigoBarras,
     unidad:        $('p-unidad').value
   };
 
@@ -1906,6 +1917,197 @@ window.guardarAjustes = async function() {
 };
 
 /* ═══════════════════════════════════════════════════════
+   RESPALDO BASE DE DATOS
+═══════════════════════════════════════════════════════ */
+const BACKUP_COLLECTIONS = [
+  'productos',
+  'anchetas',
+  'ventas',
+  'resumenes_diarios',
+  'cierres',
+  'ajustes',
+  'etiquetas_codigos'
+];
+const BACKUP_PRODUCT_SUBCOLLECTIONS = ['entradas'];
+
+function serializarValorRespaldo(value) {
+  if (value === null || value === undefined) return value;
+  if (value instanceof Date) return { __type: 'date', iso: value.toISOString() };
+  if (typeof value?.toDate === 'function' && typeof value.seconds === 'number') {
+    return {
+      __type: 'timestamp',
+      seconds: value.seconds,
+      nanoseconds: value.nanoseconds || 0
+    };
+  }
+  if (Array.isArray(value)) return value.map(serializarValorRespaldo);
+  if (typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, serializarValorRespaldo(v)]));
+  }
+  return value;
+}
+
+function restaurarValorRespaldo(value) {
+  if (value === null || value === undefined) return value;
+  if (Array.isArray(value)) return value.map(restaurarValorRespaldo);
+  if (typeof value === 'object') {
+    if (value.__type === 'timestamp' && typeof value.seconds === 'number') {
+      return new Timestamp(value.seconds, value.nanoseconds || 0);
+    }
+    if (value.__type === 'date' && value.iso) return new Date(value.iso);
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, restaurarValorRespaldo(v)]));
+  }
+  return value;
+}
+
+async function exportarColeccionRespaldo(nombre) {
+  const snap = await getDocs(collection(db(), nombre));
+  const docs = [];
+  for (const d of snap.docs) {
+    const item = { id: d.id, data: serializarValorRespaldo(d.data()) };
+    if (nombre === 'productos') {
+      item.subcollections = {};
+      for (const sub of BACKUP_PRODUCT_SUBCOLLECTIONS) {
+        const subSnap = await getDocs(collection(db(), 'productos', d.id, sub));
+        item.subcollections[sub] = subSnap.docs.map(sd => ({
+          id: sd.id,
+          data: serializarValorRespaldo(sd.data())
+        }));
+      }
+    }
+    docs.push(item);
+  }
+  return docs;
+}
+
+function descargarJsonRespaldo(data) {
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `sistemahibrido-respaldo-${fechaLocal()}-${Date.now()}.json`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+function contarDocsRespaldo(backup) {
+  let total = 0;
+  const collections = backup?.collections || {};
+  BACKUP_COLLECTIONS.forEach(nombre => {
+    (collections[nombre] || []).forEach(item => {
+      total++;
+      if (item.subcollections) {
+        Object.values(item.subcollections).forEach(arr => { total += Array.isArray(arr) ? arr.length : 0; });
+      }
+    });
+  });
+  return total;
+}
+
+window.exportarRespaldoBaseDatos = async function() {
+  showMsg('backup-msg', 'Preparando respaldo...', 'ok');
+  try {
+    const backup = {
+      sistema: 'sistemahibrido',
+      version: 1,
+      exportado_en: new Date().toISOString(),
+      collections: {}
+    };
+
+    for (const nombre of BACKUP_COLLECTIONS) {
+      backup.collections[nombre] = await exportarColeccionRespaldo(nombre);
+    }
+
+    descargarJsonRespaldo(backup);
+    showMsg('backup-msg', `Respaldo exportado: ${contarDocsRespaldo(backup)} registros.`, 'ok');
+  } catch (e) {
+    console.warn('No se pudo exportar respaldo:', e.message || e);
+    showMsg('backup-msg', 'No se pudo exportar el respaldo.', 'error');
+  }
+};
+
+async function importarDocsRespaldo(backup) {
+  const collections = backup.collections || {};
+  let batch = writeBatch(db());
+  let ops = 0;
+  let total = 0;
+
+  const commitSiNecesario = async (forzar = false) => {
+    if (ops > 0 && (forzar || ops >= 450)) {
+      await batch.commit();
+      batch = writeBatch(db());
+      ops = 0;
+    }
+  };
+
+  const agregarSet = async (ref, data) => {
+    batch.set(ref, restaurarValorRespaldo(data || {}), { merge: true });
+    ops++;
+    total++;
+    await commitSiNecesario();
+  };
+
+  for (const nombre of BACKUP_COLLECTIONS) {
+    const items = Array.isArray(collections[nombre]) ? collections[nombre] : [];
+    for (const item of items) {
+      if (!item?.id) continue;
+      await agregarSet(doc(db(), nombre, item.id), item.data);
+
+      if (nombre === 'productos' && item.subcollections) {
+        for (const sub of BACKUP_PRODUCT_SUBCOLLECTIONS) {
+          const subItems = Array.isArray(item.subcollections[sub]) ? item.subcollections[sub] : [];
+          for (const subItem of subItems) {
+            if (!subItem?.id) continue;
+            await agregarSet(doc(db(), 'productos', item.id, sub, subItem.id), subItem.data);
+          }
+        }
+      }
+    }
+  }
+
+  await commitSiNecesario(true);
+  return total;
+}
+
+window.importarRespaldoBaseDatos = async function(event) {
+  const input = event?.target;
+  const file = input?.files?.[0];
+  if (!file) return;
+
+  showMsg('backup-msg', 'Leyendo respaldo...', 'ok');
+  try {
+    const backup = JSON.parse(await file.text());
+    if (backup?.sistema !== 'sistemahibrido' || !backup.collections) {
+      showMsg('backup-msg', 'El archivo no parece ser un respaldo válido de SistemaHibrido.', 'error');
+      return;
+    }
+
+    const total = contarDocsRespaldo(backup);
+    if (!confirm(`Importar respaldo con ${total} registros? Esto crea o actualiza datos, no borra registros actuales.`)) return;
+
+    showMsg('backup-msg', 'Importando respaldo en Firebase...', 'ok');
+    const importados = await importarDocsRespaldo(backup);
+    invalidarProductosCache();
+    _anchetasCache = null;
+    _ajustesCache = null;
+    _cierresCache = null;
+    invalidarVentasCache();
+    productos = await getProductos(true);
+    anchetas = await getAnchetas(true);
+    renderInventarioPaginado();
+    loadDashboard();
+    showMsg('backup-msg', `Respaldo importado: ${importados} registros.`, 'ok');
+  } catch (e) {
+    console.warn('No se pudo importar respaldo:', e.message || e);
+    showMsg('backup-msg', 'No se pudo importar el respaldo. Revisa que sea JSON válido.', 'error');
+  } finally {
+    if (input) input.value = '';
+  }
+};
+
+/* ═══════════════════════════════════════════════════════
    ANCHETAS
 ═══════════════════════════════════════════════════════ */
 let editandoAnchetaId = null;
@@ -2043,6 +2245,20 @@ function productoConCodigo(codigo, exceptoId = null) {
   const buscado = limpiarCodigo(codigo);
   if (!buscado) return null;
   return productos.find(p => limpiarCodigo(p.codigo_barras) === buscado && p.id !== exceptoId) || null;
+}
+
+async function productoDuplicadoPorCodigoFirebase(codigo, exceptoId = null) {
+  const buscado = limpiarCodigo(codigo);
+  if (!buscado) return null;
+
+  const local = productoConCodigo(buscado, exceptoId);
+  if (local) return local;
+
+  const snap = await getDocs(
+    query(collection(db(), 'productos'), where('codigo_barras', '==', buscado), limit(3))
+  );
+  const docRepetido = snap.docs.find(d => d.id !== exceptoId);
+  return docRepetido ? { id: docRepetido.id, ...docRepetido.data() } : null;
 }
 
 function codigoProductoActual(p) {

@@ -527,6 +527,36 @@ input:focus, select:focus {
 /* ── Empty state ─────────────────────────────────────────────── */
 .empty { text-align: center; padding: 48px; color: var(--muted); font-size: 0.9rem; }
 
+/* Respaldo de base de datos */
+.backup-panel {
+  margin-top: 18px;
+}
+.backup-title {
+  padding: 0;
+  border-bottom: 0;
+  margin-bottom: 10px;
+}
+.backup-help {
+  color: var(--muted);
+  font-size: 0.88rem;
+  line-height: 1.45;
+  margin: 0 0 14px;
+}
+.backup-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.backup-file-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+#backup-import-file {
+  display: none;
+}
+
 /* Codigos de barras */
 .barcode-workspace {
   display: grid;

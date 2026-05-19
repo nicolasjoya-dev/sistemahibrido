@@ -538,6 +538,16 @@
       </div>
       <button class="btn-primary" onclick="guardarAjustes()">Guardar Ajustes</button>
     </div>
+    <div class="panel form-panel backup-panel" style="max-width:540px">
+      <div class="panel-title backup-title">Respaldo de base de datos</div>
+      <p class="backup-help">Exporta un archivo JSON con inventario, ventas, cierres, ajustes, anchetas y etiquetas. La importación crea o actualiza datos, no borra registros que no estén en el archivo.</p>
+      <div class="backup-actions">
+        <button class="btn-secondary" onclick="exportarRespaldoBaseDatos()">Exportar respaldo</button>
+        <label class="btn-secondary backup-file-btn" for="backup-import-file">Importar respaldo</label>
+        <input type="file" id="backup-import-file" accept=".json,application/json" onchange="importarRespaldoBaseDatos(event)"/>
+      </div>
+      <div id="backup-msg"></div>
+    </div>
   </div>
 
 </main>
