@@ -1,71 +1,55 @@
-# SistemaHíbrido 🏪
+# SistemaHibrido
 
-Sistema de inventario y ventas para miscelánea pequeña en Colombia.
+Sistema web de inventario, ventas, facturas y codigos de barras para una tienda pequena.
 
-## Stack
-- **Frontend:** HTML + CSS + JavaScript puro (PWA instalable)
-- **Backend:** Node.js + Express
-- **Base de datos:** SQLite (better-sqlite3)
-- **Deploy:** Railway
+## Stack actual
 
-## Estructura del proyecto
+- Frontend: HTML, CSS y JavaScript puro en `public/`.
+- Servidor: Node.js + Express solo para servir los archivos estaticos.
+- Base de datos: Firebase Firestore desde el frontend autenticado.
+- Deploy: Railway usando `server.js`.
 
-```
+## Estructura
+
+```text
 sistemahibrido/
-├── server.js              # Servidor Express
+├── server.js              # Servidor Express estatico
 ├── package.json
-├── railway.toml           # Config Railway
-├── db/
-│   └── init.js            # Esquema y conexión SQLite
-├── routes/
-│   ├── productos.js       # CRUD inventario + entradas
-│   ├── ventas.js          # Ventas, carrito, cierre del día
-│   ├── facturas.js        # Generación PDF
-│   └── ajustes.js         # Datos del negocio
+├── railway.toml
 └── public/
-    ├── index.html         # SPA principal
-    ├── manifest.json      # PWA manifest
-    ├── sw.js              # Service Worker (offline)
+    ├── index.html         # App principal
+    ├── manifest.json      # PWA
+    ├── sw.js              # Cache de assets
     ├── css/style.css
-    └── js/app.js
+    ├── js/app.js
+    └── vendor/            # Librerias locales de navegador
 ```
 
-## Instalación local
+## Uso local
 
 ```bash
-cd sistemahibrido
 npm install
 npm start
-# Abre http://localhost:3000
 ```
 
-## Módulos incluidos
+Despues abre `http://localhost:3000`.
 
-| Módulo | Funciones |
-|--------|-----------|
-| 📦 Inventario | Agregar/editar/eliminar productos, entradas de stock, alertas stock bajo |
-| 🛒 Nueva Venta | Carrito con búsqueda, escáner código de barras, descuentos, vuelto |
-| 🧾 Facturas | PDF descargable por venta (formato recibo 80mm) |
-| 📅 Calendario | Vista mensual con totales por día, detalle al hacer clic |
-| 📊 Informes | Filtro por rango de fechas, detalle por venta |
-| 📋 Cierre del Día | Totales, ganancia, producto más vendido, historial |
-| ⚙️ Ajustes | Nombre, dirección y teléfono del negocio para facturas |
+## Funciones principales
 
-## PWA / Offline
-- Instala la app en PC desde Chrome → menú → "Instalar aplicación"
-- Los assets estáticos se cachean automáticamente
-- Las ventas e inventario requieren conexión para persistir en la BD
+- Dashboard con ventas, ganancia diaria y valor del inventario por precio de compra.
+- Inventario con codigos de barras, scanner movil, alertas y centro de auditoria.
+- Nueva venta con carrito, descuentos, stock transaccional y factura PDF.
+- Etiquetas de codigos de barras con generacion individual, por lote y pendientes.
+- Respaldo/exportacion en JSON, Excel y CSV.
+- Importacion con previsualizacion y confirmacion antes de escribir en Firebase.
+
+## Datos y seguridad
+
+La app usa Firestore. Las reglas de Firebase deben limitar el acceso a los correos autorizados del negocio. Este repositorio no usa SQLite ni rutas API propias para guardar datos.
 
 ## Deploy en Railway
-1. Sube el proyecto a GitHub
-2. En Railway: New Project → Deploy from GitHub
-3. Selecciona el repo → Railway detecta Node.js automáticamente
-4. El archivo `railway.toml` ya está configurado
 
-## Variables de entorno (Railway)
-- `PORT` — Railway lo asigna automáticamente
-
-## Notas
-- La base de datos SQLite se crea automáticamente en `db/tienda.db`
-- En Railway usa un volumen persistente si quieres que los datos sobrevivan deploys
-- Los precios son en pesos colombianos (COP) sin decimales
+1. Sube los cambios a GitHub.
+2. En Railway, despliega desde el repositorio.
+3. Railway ejecuta `npm start`.
+4. `PORT` lo asigna Railway automaticamente.

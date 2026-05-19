@@ -398,6 +398,47 @@ async function ajustarResumenDia(fecha, { totalDelta = 0, countDelta = 0, gananc
   }
 }
 
+function aplicarResumenLocal(fecha, { totalDelta = 0, countDelta = 0, gananciaDelta = 0, totalAnuladoDelta = 0, anuladasDelta = 0 }) {
+  const actual = _resumenDiaCache.get(fecha)?.data || { fecha };
+  const resumen = {
+    ...actual,
+    fecha,
+    total_ventas: Math.max(0, (actual.total_ventas || 0) + totalDelta),
+    num_ventas: Math.max(0, (actual.num_ventas || 0) + countDelta),
+    ganancia_total: (actual.ganancia_total || 0) + gananciaDelta,
+    total_anulado: Math.max(0, (actual.total_anulado || 0) + totalAnuladoDelta),
+    ventas_anuladas: Math.max(0, (actual.ventas_anuladas || 0) + anuladasDelta)
+  };
+  guardarCache(_resumenDiaCache, fecha, resumen);
+  _resumenMesCache.clear();
+  if (_dashboardResumenFecha === fecha) pintarResumenDashboard(resumen);
+  return resumen;
+}
+
+function agregarVentaCache(fecha, venta) {
+  const recientes = _ventasRecientesCache.get(fecha);
+  if (cacheVigente(recientes)) {
+    guardarCache(_ventasRecientesCache, fecha, [venta, ...recientes.data].slice(0, DASH_VENTAS_LIMIT));
+  }
+  const porFecha = _ventasFechaCache.get(fecha);
+  if (cacheVigente(porFecha)) {
+    guardarCache(_ventasFechaCache, fecha, [venta, ...porFecha.data]);
+  }
+  _ventasRangoCache.clear();
+}
+
+function actualizarVentaCache(fecha, ventaId, patch) {
+  const aplicar = entry => {
+    if (!cacheVigente(entry)) return null;
+    return entry.data.map(v => v.id === ventaId ? { ...v, ...patch } : v);
+  };
+  const recientes = aplicar(_ventasRecientesCache.get(fecha));
+  if (recientes) guardarCache(_ventasRecientesCache, fecha, recientes);
+  const porFecha = aplicar(_ventasFechaCache.get(fecha));
+  if (porFecha) guardarCache(_ventasFechaCache, fecha, porFecha);
+  _ventasRangoCache.clear();
+}
+
 async function getResumenesMes(anio, mes) {
   const key = mesKey(anio, mes);
   const cached = _resumenMesCache.get(key);
@@ -590,8 +631,15 @@ window.anularVenta = async function(ventaId) {
     });
     productos = _productosCache;
   }
-  invalidarVentasCache(fechaKey);
-  await ajustarResumenDia(fechaKey, {
+  aplicarResumenLocal(fechaKey, {
+    totalDelta: -(v.total || 0),
+    countDelta: -1,
+    gananciaDelta: -ganancia,
+    totalAnuladoDelta: v.total || 0,
+    anuladasDelta: 1
+  });
+  actualizarVentaCache(fechaKey, ventaId, { anulada: true, fecha_anulacion: new Date() });
+  ajustarResumenDia(fechaKey, {
     totalDelta: -(v.total || 0),
     countDelta: -1,
     gananciaDelta: -ganancia,
@@ -1847,70 +1895,14 @@ window.confirmarVenta = async function() {
     });
     productos = _productosCache;
   }
-  invalidarVentasCache(fechaKey);
-  await ajustarResumenDia(fechaKey, { totalDelta: total, countDelta: 1, gananciaDelta: ganancia });
+  const ventaLocal = { id: nuevaVentaRef.id, ...ventaData, fecha: ahora };
+  agregarVentaCache(fechaKey, ventaLocal);
+  aplicarResumenLocal(fechaKey, { totalDelta: total, countDelta: 1, gananciaDelta: ganancia });
+  ajustarResumenDia(fechaKey, { totalDelta: total, countDelta: 1, gananciaDelta: ganancia });
 
   showMsg('venta-msg', `Venta registrada. Total: ${fmtCOP(total)}`, 'ok');
   if (confirm('Venta registrada. Â¿Descargar factura PDF?')) {
     await imprimirFactura(nuevaVentaRef.id);
-  }
-  limpiarCarrito();
-  return;
-
-  const ventaRef = await addDoc(collection(db(), 'ventas'), {
-    items:             carrito.map(c => ({ ...c })),
-    productos_resumen: resumen,
-    subtotal:          sub,
-    descuento:         desc,
-    total,
-    medio_pago,
-    efectivo:          efectivo || 0,
-    vuelto:            efectivo ? efectivo - total : 0,
-    anulada:           false,
-    fecha:             serverTimestamp(),
-    fecha_key:         fechaLocal(ahora)
-  });
-
-  // Descontar stock — actualiza Firestore Y caché local en paralelo por producto
-  const stockUpdates = [];
-  for (const item of carrito) {
-    if (item._ancheta_id) {
-      for (const sub of (item._ancheta_items || [])) {
-        stockUpdates.push(
-          (async () => {
-            const prodRef  = doc(db(), 'productos', sub.producto_id);
-            const prodSnap = await getDoc(prodRef);
-            if (prodSnap.exists()) {
-              const nuevoStock = Math.max(0, (prodSnap.data().stock || 0) - (sub.cantidad * item.cantidad));
-              await updateDoc(prodRef, { stock: nuevoStock });
-              // Actualizar caché
-              const idx = _productosCache?.findIndex(p => p.id === sub.producto_id);
-              if (idx !== undefined && idx >= 0) _productosCache[idx].stock = nuevoStock;
-            }
-          })()
-        );
-      }
-    } else {
-      stockUpdates.push(
-        (async () => {
-          const prodRef  = doc(db(), 'productos', item.producto_id);
-          const prodSnap = await getDoc(prodRef);
-          if (prodSnap.exists()) {
-            const nuevoStock = Math.max(0, (prodSnap.data().stock || 0) - item.cantidad);
-            await updateDoc(prodRef, { stock: nuevoStock });
-            const idx = _productosCache?.findIndex(p => p.id === item.producto_id);
-            if (idx !== undefined && idx >= 0) _productosCache[idx].stock = nuevoStock;
-          }
-        })()
-      );
-    }
-  }
-  await Promise.all(stockUpdates);
-  productos = _productosCache || [];
-
-  showMsg('venta-msg', `✓ Venta registrada. Total: ${fmtCOP(total)}`, 'ok');
-  if (confirm('Venta registrada. ¿Descargar factura PDF?')) {
-    await imprimirFactura(ventaRef.id);
   }
   limpiarCarrito();
 };
@@ -2226,6 +2218,7 @@ const PRODUCTOS_EXPORT_FIELDS = [
   'unidad'
 ];
 let backupImportFormato = 'json';
+let backupImportPendiente = null;
 
 function cerrarBackupMenus() {
   document.querySelectorAll('.backup-menu.open').forEach(menu => menu.classList.remove('open'));
@@ -2535,13 +2528,11 @@ async function filasDesdeArchivoProductos(file, formato) {
   return null;
 }
 
-async function importarProductosDesdeFilas(filas, origen = 'archivo') {
+function analizarImportacionProductos(filas, existentes, origen = 'archivo') {
   if (!Array.isArray(filas) || filas.length === 0) {
-    showMsg('backup-msg', 'El archivo no tiene productos para importar.', 'error');
-    return;
+    return { origen, operaciones: [], errores: ['El archivo no tiene productos para importar.'], sinCambios: 0 };
   }
 
-  const existentes = await getProductos(true);
   const byId = new Map(existentes.map(p => [p.id, p]));
   const byCode = new Map();
   const byNameCat = new Map();
@@ -2556,6 +2547,7 @@ async function importarProductosDesdeFilas(filas, origen = 'archivo') {
   const errores = [];
   const idsArchivo = new Map();
   const codigosArchivo = new Map();
+  let sinCambios = 0;
 
   filas.forEach((row, index) => {
     const parsed = normalizarProductoImportacion(row);
@@ -2591,12 +2583,21 @@ async function importarProductosDesdeFilas(filas, origen = 'archivo') {
 
     const data = { ...parsed.data };
     if (target) {
-      if (Object.keys(data).length === 0) return;
-      operaciones.push({ tipo: 'actualizar', id: target.id, data });
+      if (Object.keys(data).length === 0) {
+        sinCambios++;
+        return;
+      }
+      operaciones.push({
+        tipo: 'actualizar',
+        id: target.id,
+        nombre: data.nombre || target.nombre || parsed.nombre || 'Producto',
+        data
+      });
     } else {
       operaciones.push({
         tipo: 'crear',
         id: parsed.id || null,
+        nombre: data.nombre || parsed.nombre || 'Producto nuevo',
         data: {
           nombre: data.nombre || parsed.nombre,
           categoria: data.categoria || '',
@@ -2612,27 +2613,75 @@ async function importarProductosDesdeFilas(filas, origen = 'archivo') {
     }
   });
 
-  if (errores.length > 0) {
-    showMsg('backup-msg', `No se importo: ${errores.slice(0, 3).join(' ')}`, 'error');
-    console.warn('Errores de importacion de productos:', errores);
+  return { origen, operaciones, errores, sinCambios };
+}
+
+function mostrarBackupHtml(html) {
+  const el = $('backup-msg');
+  if (el) el.innerHTML = html;
+}
+
+function renderPreviewImportacionProductos(analisis) {
+  backupImportPendiente = null;
+
+  if (analisis.errores.length > 0) {
+    mostrarBackupHtml(`<div class="msg error">
+      <strong>No se importo nada.</strong><br/>
+      ${analisis.errores.slice(0, 6).map(e => `<div>${escapeHtml(e)}</div>`).join('')}
+      ${analisis.errores.length > 6 ? `<div>Y ${analisis.errores.length - 6} error(es) mas.</div>` : ''}
+    </div>`);
+    console.warn('Errores de importacion de productos:', analisis.errores);
     return;
   }
 
-  const crear = operaciones.filter(op => op.tipo === 'crear').length;
-  const actualizar = operaciones.filter(op => op.tipo === 'actualizar').length;
-  if (operaciones.length === 0) {
+  const crear = analisis.operaciones.filter(op => op.tipo === 'crear').length;
+  const actualizar = analisis.operaciones.filter(op => op.tipo === 'actualizar').length;
+  if (analisis.operaciones.length === 0) {
     showMsg('backup-msg', 'No hay cambios para importar.', 'warn');
     return;
   }
-  if (!confirm(`Importar ${operaciones.length} producto(s) desde ${origen}? Nuevos: ${crear}. Actualizados: ${actualizar}. No se borrara nada.`)) return;
+
+  backupImportPendiente = { tipo: 'productos', analisis };
+  const muestra = analisis.operaciones.slice(0, 8).map(op =>
+    `<div>${op.tipo === 'crear' ? 'Crear' : 'Actualizar'}: <strong>${escapeHtml(op.nombre)}</strong></div>`
+  ).join('');
+  mostrarBackupHtml(`<div class="msg ok">
+    <strong>Previsualizacion lista: ${analisis.operaciones.length} producto(s).</strong><br/>
+    Nuevos: ${crear}. Actualizados: ${actualizar}. Sin cambios: ${analisis.sinCambios}.<br/>
+    <div style="margin-top:8px">${muestra}${analisis.operaciones.length > 8 ? `<div>Y ${analisis.operaciones.length - 8} mas.</div>` : ''}</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
+      <button class="btn-primary" onclick="confirmarImportacionPendiente()">Confirmar importacion</button>
+      <button class="btn-secondary" onclick="cancelarImportacionPendiente()">Cancelar</button>
+    </div>
+  </div>`);
+}
+
+function actualizarProductosCacheImportacion(aplicadas) {
+  if (!_productosCache) return;
+  aplicadas.forEach(op => {
+    const idx = _productosCache.findIndex(p => p.id === op.id);
+    if (idx >= 0) {
+      _productosCache[idx] = { ..._productosCache[idx], ...op.data };
+    } else {
+      _productosCache.push({ id: op.id, ...op.data });
+    }
+  });
+  productos = _productosCache;
+  _productosCargadoEn = Date.now();
+}
+
+async function aplicarImportacionProductos(analisis) {
+  const operaciones = analisis.operaciones;
 
   let batch = writeBatch(db());
   let ops = 0;
+  const aplicadas = [];
   for (const op of operaciones) {
     const ref = op.tipo === 'crear'
       ? (op.id ? doc(db(), 'productos', op.id) : doc(collection(db(), 'productos')))
       : doc(db(), 'productos', op.id);
     batch.set(ref, op.data, { merge: true });
+    aplicadas.push({ ...op, id: ref.id });
     ops++;
     if (ops >= 450) {
       await batch.commit();
@@ -2642,12 +2691,21 @@ async function importarProductosDesdeFilas(filas, origen = 'archivo') {
   }
   if (ops > 0) await batch.commit();
 
-  invalidarProductos();
-  productos = await getProductos(true);
+  actualizarProductosCacheImportacion(aplicadas);
   renderInventarioPaginado();
-  if ($('tab-auditoria')?.classList.contains('active')) loadAuditoria(true);
-  loadDashboard();
+  if ($('tab-auditoria')?.classList.contains('active')) renderAuditoria(calcularAuditoria());
+  if ($('tab-dashboard')?.classList.contains('active')) loadDashboard();
+  actualizarCategoriasCodigo();
+  const crear = operaciones.filter(op => op.tipo === 'crear').length;
+  const actualizar = operaciones.filter(op => op.tipo === 'actualizar').length;
   showMsg('backup-msg', `Productos importados: ${crear} nuevos, ${actualizar} actualizados.`, 'ok');
+}
+
+async function importarProductosDesdeFilas(filas, origen = 'archivo') {
+  showMsg('backup-msg', 'Preparando previsualizacion...', 'ok');
+  const existentes = await getProductos(true);
+  const analisis = analizarImportacionProductos(filas, existentes, origen);
+  renderPreviewImportacionProductos(analisis);
 }
 
 async function exportarRespaldoJsonCompleto() {
@@ -2736,17 +2794,7 @@ async function importarDocsRespaldo(backup) {
 /* ═══════════════════════════════════════════════════════
    IMPORTACION RESPALDO
 ═══════════════════════════════════════════════════════ */
-async function importarRespaldoJsonCompleto(file) {
-  showMsg('backup-msg', 'Leyendo respaldo...', 'ok');
-  const backup = JSON.parse(await file.text());
-  if (backup?.sistema !== 'sistemahibrido' || !backup.collections) {
-    showMsg('backup-msg', 'El archivo no parece ser un respaldo valido de SistemaHibrido.', 'error');
-    return;
-  }
-
-  const total = contarDocsRespaldo(backup);
-  if (!confirm(`Importar respaldo con ${total} registros? Esto crea o actualiza datos, no borra registros actuales.`)) return;
-
+async function aplicarImportacionJsonCompleta(backup) {
   showMsg('backup-msg', 'Importando respaldo en Firebase...', 'ok');
   const importados = await importarDocsRespaldo(backup);
   invalidarProductos();
@@ -2758,8 +2806,51 @@ async function importarRespaldoJsonCompleto(file) {
   productos = await getProductos(true);
   anchetas = await getAnchetas(true);
   renderInventarioPaginado();
-  loadDashboard();
+  if ($('tab-dashboard')?.classList.contains('active')) loadDashboard();
   showMsg('backup-msg', `Respaldo importado: ${importados} registros.`, 'ok');
+}
+
+window.confirmarImportacionPendiente = async function() {
+  const pendiente = backupImportPendiente;
+  if (!pendiente) {
+    showMsg('backup-msg', 'No hay una importacion pendiente.', 'warn');
+    return;
+  }
+  backupImportPendiente = null;
+  try {
+    if (pendiente.tipo === 'json') await aplicarImportacionJsonCompleta(pendiente.backup);
+    else if (pendiente.tipo === 'productos') await aplicarImportacionProductos(pendiente.analisis);
+  } catch (e) {
+    console.warn('No se pudo confirmar importacion:', e.message || e);
+    showMsg('backup-msg', 'No se pudo importar. Revisa conexion y formato.', 'error');
+  }
+};
+
+window.cancelarImportacionPendiente = function() {
+  backupImportPendiente = null;
+  showMsg('backup-msg', 'Importacion cancelada. No se cambio nada en Firebase.', 'warn');
+};
+
+async function importarRespaldoJsonCompleto(file) {
+  showMsg('backup-msg', 'Leyendo respaldo...', 'ok');
+  const backup = JSON.parse(await file.text());
+  if (backup?.sistema !== 'sistemahibrido' || !backup.collections) {
+    showMsg('backup-msg', 'El archivo no parece ser un respaldo valido de SistemaHibrido.', 'error');
+    return;
+  }
+
+  const total = contarDocsRespaldo(backup);
+  backupImportPendiente = { tipo: 'json', backup };
+  mostrarBackupHtml(`<div class="msg ok">
+    <strong>Previsualizacion JSON completo</strong><br/>
+    Registros que se van a crear o actualizar: ${total}.<br/>
+    Colecciones incluidas: ${BACKUP_COLLECTIONS.filter(c => backup.collections?.[c]).join(', ')}.<br/>
+    No se borraran registros que no esten en el archivo.
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
+      <button class="btn-primary" onclick="confirmarImportacionPendiente()">Confirmar importacion JSON</button>
+      <button class="btn-secondary" onclick="cancelarImportacionPendiente()">Cancelar</button>
+    </div>
+  </div>`);
 }
 
 window.importarRespaldoBaseDatos = async function(event) {

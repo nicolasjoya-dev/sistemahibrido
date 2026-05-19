@@ -1,15 +1,13 @@
 {
   "name": "sistemahibrido",
   "version": "1.0.0",
-  "description": "Sistema de inventario y ventas para miscelánea",
+  "description": "Sistema de inventario y ventas para tienda pequena",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.94.0",
-    "express": "^4.18.2",
-    "jsbarcode": "^3.11.6"
+    "express": "^4.18.2"
   }
 }
