@@ -429,6 +429,53 @@ input:focus, select:focus {
 .mobile-scan-btn {
   display: none;
 }
+.alt-code-section {
+  margin-top: -2px;
+}
+.alt-code-tools {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+.alt-code-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-height: 34px;
+}
+.alt-code-empty {
+  color: var(--muted);
+  font-size: 0.84rem;
+  padding: 6px 0;
+}
+.alt-code-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 7px 9px 7px 11px;
+  color: var(--text);
+  font-size: 0.86rem;
+}
+.alt-code-chip span {
+  overflow-wrap: anywhere;
+}
+.alt-code-chip button {
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 6px;
+  background: var(--bg2);
+  color: var(--muted);
+  cursor: pointer;
+}
+.alt-code-chip button:hover {
+  color: var(--red);
+}
 .readonly-field { background: var(--bg); cursor: default; color: var(--muted); }
 .total-field { color: var(--teal) !important; font-weight: 700; font-size: 1.05rem !important; }
 
@@ -1146,6 +1193,13 @@ input:focus, select:focus {
   }
   .barcode-scan-field .scan-btn {
     min-height: 46px;
+  }
+  .alt-code-tools {
+    grid-template-columns: 1fr;
+  }
+  .alt-code-chip {
+    width: 100%;
+    justify-content: space-between;
   }
   label {
     font-size: 0.74rem;

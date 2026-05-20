@@ -671,6 +671,14 @@
         </select>
       </div>
     </div>
+    <div class="form-group alt-code-section">
+      <label>Códigos alternativos</label>
+      <div class="alt-code-tools">
+        <input type="text" id="p-alt-barras-input" placeholder="Otro código para el mismo producto" onkeydown="if(event.key==='Enter'){event.preventDefault();agregarCodigoAlternativoProducto();}"/>
+        <button type="button" class="btn-secondary" onclick="agregarCodigoAlternativoProducto()">Agregar</button>
+      </div>
+      <div id="p-alt-barras-list" class="alt-code-list"></div>
+    </div>
     <div class="modal-actions">
       <button class="btn-secondary" onclick="closeModal('modal-producto')">Cancelar</button>
       <button class="btn-primary" id="modal-save-btn" onclick="guardarProducto()">Guardar</button>

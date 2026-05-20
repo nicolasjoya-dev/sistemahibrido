@@ -231,6 +231,7 @@ let scannerQuaggaHandler = null;
 let scannerEngine       = '';
 let scannerFallbackTimer = null;
 let scannerDestino      = 'producto';
+let codigosAlternativosProductoModal = [];
 let calAnio = new Date().getFullYear();
 let calMes  = new Date().getMonth() + 1;
 
@@ -768,19 +769,34 @@ document.addEventListener('click', e => {
   $('inv-categoria-trigger')?.setAttribute('aria-expanded', 'false');
 });
 
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Enter' || e.target?.id !== 'inv-search') return;
+  const input = e.target;
+  const limpio = limpiarCodigo(input.value || '');
+  const ahora = Date.now();
+  if (limpio && codigoInventarioEscaneadoDosVeces(limpio, ahora)) {
+    e.preventDefault();
+    input.value = '';
+    resetEscaneoInventario();
+    filtrarInventario();
+    showMsg('inv-msg', `Busqueda limpiada: ${limpio} escaneado dos veces.`, 'ok');
+  }
+});
+
 function productosInventarioFiltrados() {
   return productos.filter(p => {
-    const codigo = (p.codigo_barras || '').trim();
+    const codigos = codigosProducto(p);
+    const tieneCodigo = codigos.length > 0;
     const coincideTexto = !invFiltro ||
       p.nombre.toLowerCase().includes(invFiltro) ||
       (p.categoria || '').toLowerCase().includes(invFiltro) ||
-      codigo.toLowerCase().includes(invFiltro);
+      codigos.some(codigo => codigo.toLowerCase().includes(invFiltro));
     const coincideCategoria = !invCategoriaFiltro ||
       categoriaKeyInventario(p.categoria) === invCategoriaFiltro;
     const coincideCodigo =
       invCodigoFiltro === 'todos' ||
-      (invCodigoFiltro === 'con' && codigo) ||
-      (invCodigoFiltro === 'sin' && !codigo);
+      (invCodigoFiltro === 'con' && tieneCodigo) ||
+      (invCodigoFiltro === 'sin' && !tieneCodigo);
     return coincideTexto && coincideCategoria && coincideCodigo;
   });
 }
@@ -850,13 +866,20 @@ function codigoInventarioEscaneadoDosVeces(codigo, ahora = Date.now()) {
     ahora - invUltimoCodigoEscaneadoEn <= INV_SCAN_CLEAR_MS;
 }
 
+function registrarCodigoInventarioEscaneado(codigo, ahora = Date.now()) {
+  const limpio = limpiarCodigo(codigo);
+  if (!limpio) return;
+  invUltimoCodigoEscaneado = limpio;
+  invUltimoCodigoEscaneadoEn = ahora;
+}
+
 function aplicarCodigoEscaneadoInventario(codigo, motor = 'lector') {
   const limpio = limpiarCodigo(codigo);
   const input = $('inv-search');
   if (!input || !limpio) return;
 
   const ahora = Date.now();
-  if (input.value.trim() === limpio && codigoInventarioEscaneadoDosVeces(limpio, ahora)) {
+  if (codigoInventarioEscaneadoDosVeces(limpio, ahora)) {
     input.value = '';
     resetEscaneoInventario();
     filtrarInventario();
@@ -866,8 +889,7 @@ function aplicarCodigoEscaneadoInventario(codigo, motor = 'lector') {
 
   input.value = limpio;
   filtrarInventario();
-  invUltimoCodigoEscaneado = limpio;
-  invUltimoCodigoEscaneadoEn = ahora;
+  registrarCodigoInventarioEscaneado(limpio, ahora);
   showMsg('inv-msg', `Codigo escaneado: ${limpio} (${motor})`, 'ok');
 }
 
@@ -875,10 +897,11 @@ window.filtrarInventario = function(desdeBusqueda = false) {
   const input = $('inv-search');
   const valor = input?.value || '';
   const limpio = limpiarCodigo(valor);
+  const ahora = Date.now();
   const esDobleCodigoPegado = !!(invUltimoCodigoEscaneado &&
     limpio === invUltimoCodigoEscaneado + invUltimoCodigoEscaneado &&
-    Date.now() - invUltimoCodigoEscaneadoEn <= INV_SCAN_CLEAR_MS);
-  if (desdeBusqueda && (esDobleCodigoPegado || (limpio && codigoInventarioEscaneadoDosVeces(limpio)))) {
+    ahora - invUltimoCodigoEscaneadoEn <= INV_SCAN_CLEAR_MS);
+  if (desdeBusqueda && (esDobleCodigoPegado || (limpio && codigoInventarioEscaneadoDosVeces(limpio, ahora)))) {
     const normalizado = valor.trim();
     if (esDobleCodigoPegado || normalizado === limpio) {
       const codigoLimpiado = esDobleCodigoPegado ? invUltimoCodigoEscaneado : limpio;
@@ -896,11 +919,10 @@ window.filtrarInventario = function(desdeBusqueda = false) {
   invFiltro = valor.toLowerCase().trim();
   invCodigoFiltro = $('inv-codigo-filtro')?.value || 'todos';
   invCategoriaFiltro = $('inv-categoria-filtro')?.value || '';
-  const productoExacto = limpio && productos.find(p => limpiarCodigo(p.codigo_barras || '') === limpio);
+  const productoExacto = limpio && productoConCodigo(limpio);
   if (productoExacto) {
-    invUltimoCodigoEscaneado = limpio;
-    invUltimoCodigoEscaneadoEn = Date.now();
-  } else if (!limpio || limpiarCodigo(invFiltro) !== invUltimoCodigoEscaneado) {
+    registrarCodigoInventarioEscaneado(limpio, ahora);
+  } else if (!limpio || (invUltimoCodigoEscaneado && ahora - invUltimoCodigoEscaneadoEn > INV_SCAN_CLEAR_MS)) {
     resetEscaneoInventario();
   }
   invPagina = 0;
@@ -966,7 +988,7 @@ async function cargarAuditoriaIgnorados(forzar = false) {
 }
 
 function productosConCodigoAuditoria() {
-  return productos.filter(p => limpiarCodigo(p.codigo_barras || ''));
+  return productos.filter(p => codigosProducto(p).length > 0);
 }
 
 function calcularAuditoria() {
@@ -975,10 +997,10 @@ function calcularAuditoria() {
   const porCodigo = new Map();
 
   productos.forEach(p => {
-    const codigo = limpiarCodigo(p.codigo_barras || '');
-    if (!codigo) return;
-    if (!porCodigo.has(codigo)) porCodigo.set(codigo, []);
-    porCodigo.get(codigo).push(p);
+    codigosProducto(p).forEach(codigo => {
+      if (!porCodigo.has(codigo)) porCodigo.set(codigo, []);
+      porCodigo.get(codigo).push(p);
+    });
   });
 
   const gruposDuplicados = [...porCodigo.entries()].filter(([, lista]) => lista.length > 1);
@@ -1192,7 +1214,10 @@ window.openModalProducto = function(id) {
   $('modal-save-btn').textContent = id ? 'Actualizar' : 'Guardar';
   $('modal-msg').innerHTML = '';
   $('margen-display') && ($('margen-display').style.display = 'none');
-  ['p-nombre','p-categoria','p-compra','p-venta','p-stock','p-barras'].forEach(f => $(f).value = '');
+  ['p-nombre','p-categoria','p-compra','p-venta','p-stock','p-barras','p-alt-barras-input'].forEach(f => {
+    if ($(f)) $(f).value = '';
+  });
+  codigosAlternativosProductoModal = [];
   $('p-stockmin').value = 5;
   $('p-unidad').value   = 'unidades';
 
@@ -1206,10 +1231,12 @@ window.openModalProducto = function(id) {
       $('p-stock').value     = p.stock;
       $('p-stockmin').value  = p.stock_minimo;
       $('p-barras').value    = p.codigo_barras || '';
+      codigosAlternativosProductoModal = codigosAlternativosProducto(p);
       $('p-unidad').value    = p.unidad;
       calcMargen();
     }
   }
+  renderCodigosAlternativosProducto();
   productoGuardando = false;
   if ($('modal-save-btn')) $('modal-save-btn').disabled = false;
   openModal('modal-producto');
@@ -1236,22 +1263,95 @@ window.calcMargen = function() {
   }
 };
 
+function renderCodigosAlternativosProducto() {
+  const cont = $('p-alt-barras-list');
+  if (!cont) return;
+  if (codigosAlternativosProductoModal.length === 0) {
+    cont.innerHTML = '<div class="alt-code-empty">Sin códigos alternativos.</div>';
+    return;
+  }
+  cont.innerHTML = codigosAlternativosProductoModal.map(codigo => `
+    <div class="alt-code-chip">
+      <span>${escapeHtml(codigo)}</span>
+      <button type="button" title="Quitar código" onclick="quitarCodigoAlternativoProducto('${escapeJsString(codigo)}')">×</button>
+    </div>
+  `).join('');
+}
+
+window.agregarCodigoAlternativoProducto = function() {
+  const input = $('p-alt-barras-input');
+  const codigo = limpiarCodigo(input?.value || '');
+  const principal = limpiarCodigo($('p-barras')?.value || '');
+  if (!codigo) {
+    showMsg('modal-msg', 'Escribe un código alternativo válido.', 'warn');
+    return;
+  }
+  if (principal && codigo === principal) {
+    showMsg('modal-msg', 'Ese código ya está como código principal.', 'warn');
+    return;
+  }
+  if (codigosAlternativosProductoModal.includes(codigo)) {
+    showMsg('modal-msg', 'Ese código alternativo ya está agregado.', 'warn');
+    return;
+  }
+  codigosAlternativosProductoModal.push(codigo);
+  if (input) input.value = '';
+  renderCodigosAlternativosProducto();
+};
+
+window.quitarCodigoAlternativoProducto = function(codigo) {
+  const limpio = limpiarCodigo(codigo);
+  codigosAlternativosProductoModal = codigosAlternativosProductoModal.filter(item => item !== limpio);
+  renderCodigosAlternativosProducto();
+};
+
+async function validarCodigosProductoModal(codigoPrincipal, codigosAlternativos) {
+  const vistos = new Set();
+  const revisar = [];
+  const agregar = codigo => {
+    const limpio = limpiarCodigo(codigo);
+    if (!limpio) return;
+    if (vistos.has(limpio)) {
+      throw new Error(`El código ${limpio} está repetido dentro del producto.`);
+    }
+    vistos.add(limpio);
+    revisar.push(limpio);
+  };
+
+  agregar(codigoPrincipal);
+  codigosAlternativos.forEach(agregar);
+
+  if (revisar.length === 0) return;
+  showMsg('modal-msg', 'Revisando códigos de barras...', 'ok');
+  for (const codigo of revisar) {
+    const repetido = await productoDuplicadoPorCodigoFirebase(codigo, editandoProductoId);
+    if (repetido) {
+      throw new Error(`El código ${codigo} ya está asignado a: ${repetido.nombre || 'otro producto'}.`);
+    }
+  }
+}
+
 async function guardarProductoInterno() {
   const nombre       = $('p-nombre').value.trim();
   const precio_venta = parseFloat($('p-venta').value);
   const codigoBarras = limpiarCodigo($('p-barras').value.trim() || '');
+  const altPendiente = limpiarCodigo($('p-alt-barras-input')?.value || '');
+  if (altPendiente && !codigosAlternativosProductoModal.includes(altPendiente)) {
+    codigosAlternativosProductoModal.push(altPendiente);
+    if ($('p-alt-barras-input')) $('p-alt-barras-input').value = '';
+  }
+  codigosAlternativosProductoModal = codigosAlternativosProducto({ codigos_alternativos: codigosAlternativosProductoModal });
+  renderCodigosAlternativosProducto();
   if (!nombre || isNaN(precio_venta)) {
     showMsg('modal-msg', 'Nombre y precio de venta son obligatorios.', 'error');
     return;
   }
 
-  if (codigoBarras) {
-    showMsg('modal-msg', 'Revisando código de barras...', 'ok');
-    const repetido = await productoDuplicadoPorCodigoFirebase(codigoBarras, editandoProductoId);
-    if (repetido) {
-      showMsg('modal-msg', `Ese código ya está asignado a: ${escapeHtml(repetido.nombre || 'otro producto')}.`, 'error');
-      return;
-    }
+  try {
+    await validarCodigosProductoModal(codigoBarras, codigosAlternativosProductoModal);
+  } catch (e) {
+    showMsg('modal-msg', escapeHtml(e.message || 'Hay un código de barras repetido.'), 'error');
+    return;
   }
 
   const data = {
@@ -1262,6 +1362,7 @@ async function guardarProductoInterno() {
     stock:         parseFloat($('p-stock').value) || 0,
     stock_minimo:  parseFloat($('p-stockmin').value) || 5,
     codigo_barras: codigoBarras,
+    codigos_alternativos: [...codigosAlternativosProductoModal],
     unidad:        $('p-unidad').value
   };
 
@@ -1395,7 +1496,7 @@ function completarEscaneoBarras(codigo, motor = 'lector') {
   } else if (scannerDestino === 'venta') {
     const input = $('venta-buscar');
     input.value = limpio;
-    const producto = productos.find(p => limpiarCodigo(p.codigo_barras || '') === limpio);
+    const producto = productoConCodigo(limpio);
     if (producto) {
       $('venta-sugerencias').innerHTML = '';
       showMsg('venta-msg', `Producto escaneado: ${producto.nombre} (${motor})`, 'ok');
@@ -1800,8 +1901,12 @@ window.buscarProductoVenta = async function() {
 
   // Usa caché — no llama Firestore
   const qLow = q.toLowerCase();
+  const qCode = limpiarCodigo(q);
   const prods = productos
-    .filter(p => p.nombre.toLowerCase().includes(qLow) || (p.codigo_barras || '').includes(q))
+    .filter(p =>
+      p.nombre.toLowerCase().includes(qLow) ||
+      (qCode && codigosProducto(p).some(codigo => codigo.includes(qCode)))
+    )
     .slice(0, 6)
     .map(p => ({ ...p, _tipo: 'producto' }));
 
@@ -2379,6 +2484,7 @@ const PRODUCTOS_EXPORT_FIELDS = [
   'stock',
   'stock_minimo',
   'codigo_barras',
+  'codigos_alternativos',
   'unidad'
 ];
 let backupImportFormato = 'json';
@@ -2507,6 +2613,7 @@ function productoFilaExportacion(p) {
     stock: numeroSeguro(p.stock),
     stock_minimo: numeroSeguro(p.stock_minimo),
     codigo_barras: limpiarCodigo(p.codigo_barras || ''),
+    codigos_alternativos: codigosAlternativosProducto(p).join(', '),
     unidad: p.unidad || 'unidades'
   };
 }
@@ -2598,18 +2705,36 @@ function textoImportacion(value) {
   return texto ? texto : undefined;
 }
 
+function codigosAlternativosImportacion(value, codigoPrincipal = '') {
+  const principal = limpiarCodigo(codigoPrincipal);
+  const raw = Array.isArray(value) ? value : String(value || '').split(/[,\n;|]+/);
+  const vistos = new Set(principal ? [principal] : []);
+  return raw
+    .map(limpiarCodigo)
+    .filter(codigo => {
+      if (!codigo || vistos.has(codigo)) return false;
+      vistos.add(codigo);
+      return true;
+    });
+}
+
 function normalizarProductoImportacion(row) {
   const id = textoImportacion(valorFilaImportacion(row, ['id', 'doc_id', 'documento_id']));
   const nombre = textoImportacion(valorFilaImportacion(row, ['nombre', 'producto', 'name']));
   const categoria = textoImportacion(valorFilaImportacion(row, ['categoria', 'categoría', 'category']));
   const unidad = textoImportacion(valorFilaImportacion(row, ['unidad', 'unit']));
   const codigo = limpiarCodigo(valorFilaImportacion(row, ['codigo_barras', 'codigo barras', 'codigo', 'código', 'barcode', 'ean']) || '');
+  const alternativos = codigosAlternativosImportacion(
+    valorFilaImportacion(row, ['codigos_alternativos', 'codigos alternativos', 'codigo_alternativo', 'codigo alternativo', 'barcodes_alt', 'alternate_barcodes']),
+    codigo
+  );
   const data = {};
 
   if (nombre !== undefined) data.nombre = nombre;
   if (categoria !== undefined) data.categoria = categoria;
   if (unidad !== undefined) data.unidad = unidad;
   if (codigo) data.codigo_barras = codigo;
+  if (alternativos.length > 0) data.codigos_alternativos = alternativos;
 
   const compra = numeroImportacion(valorFilaImportacion(row, ['precio_compra', 'p_compra', 'compra', 'costo']));
   const venta = numeroImportacion(valorFilaImportacion(row, ['precio_venta', 'p_venta', 'venta', 'precio']));
@@ -2701,8 +2826,9 @@ function analizarImportacionProductos(filas, existentes, origen = 'archivo') {
   const byCode = new Map();
   const byNameCat = new Map();
   existentes.forEach(p => {
-    const code = limpiarCodigo(p.codigo_barras || '');
-    if (code && !byCode.has(code)) byCode.set(code, p);
+    codigosProducto(p).forEach(code => {
+      if (code && !byCode.has(code)) byCode.set(code, p);
+    });
     const key = keyNombreCategoria(p.nombre, p.categoria);
     if (key !== '|' && !byNameCat.has(key)) byNameCat.set(key, p);
   });
@@ -2716,6 +2842,9 @@ function analizarImportacionProductos(filas, existentes, origen = 'archivo') {
   filas.forEach((row, index) => {
     const parsed = normalizarProductoImportacion(row);
     if (!parsed.id && !parsed.codigo && !parsed.nombre && Object.keys(parsed.data).length === 0) return;
+    const codigosParsed = [parsed.codigo, ...(parsed.data.codigos_alternativos || [])]
+      .map(limpiarCodigo)
+      .filter(Boolean);
     if (parsed.id) {
       if (idsArchivo.has(parsed.id)) {
         errores.push(`Fila ${index + 2}: id repetido con fila ${idsArchivo.get(parsed.id)}.`);
@@ -2723,18 +2852,19 @@ function analizarImportacionProductos(filas, existentes, origen = 'archivo') {
       }
       idsArchivo.set(parsed.id, index + 2);
     }
-    if (parsed.codigo) {
-      if (codigosArchivo.has(parsed.codigo)) {
-        errores.push(`Fila ${index + 2}: codigo ${parsed.codigo} repetido con fila ${codigosArchivo.get(parsed.codigo)}.`);
+    for (const codigoArchivo of codigosParsed) {
+      if (codigosArchivo.has(codigoArchivo)) {
+        errores.push(`Fila ${index + 2}: codigo ${codigoArchivo} repetido con fila ${codigosArchivo.get(codigoArchivo)}.`);
         return;
       }
-      codigosArchivo.set(parsed.codigo, index + 2);
+      codigosArchivo.set(codigoArchivo, index + 2);
     }
 
     let target = parsed.id ? byId.get(parsed.id) : null;
-    const productoPorCodigo = parsed.codigo ? byCode.get(parsed.codigo) : null;
+    const codigoExistente = codigosParsed.find(codigo => byCode.has(codigo));
+    const productoPorCodigo = codigoExistente ? byCode.get(codigoExistente) : null;
     if (target && productoPorCodigo && productoPorCodigo.id !== target.id) {
-      errores.push(`Fila ${index + 2}: codigo ${parsed.codigo} ya pertenece a ${productoPorCodigo.nombre}.`);
+      errores.push(`Fila ${index + 2}: codigo ${codigoExistente} ya pertenece a ${productoPorCodigo.nombre}.`);
       return;
     }
     if (!target && productoPorCodigo) target = productoPorCodigo;
@@ -2770,6 +2900,7 @@ function analizarImportacionProductos(filas, existentes, origen = 'archivo') {
           stock: data.stock ?? 0,
           stock_minimo: data.stock_minimo ?? 5,
           codigo_barras: data.codigo_barras || '',
+          codigos_alternativos: data.codigos_alternativos || [],
           unidad: data.unidad || 'unidades',
           fecha_creacion: serverTimestamp()
         }
@@ -3179,10 +3310,44 @@ function limpiarCodigo(value) {
   return String(value || '').trim().toUpperCase().replace(/[^A-Z0-9._-]/g, '');
 }
 
+function codigosAlternativosProducto(p) {
+  const raw = p?.codigos_alternativos ?? p?.codigosAlternativos ?? p?.codigo_alternativo ?? p?.codigos_extra ?? '';
+  const lista = Array.isArray(raw)
+    ? raw
+    : String(raw || '').split(/[,\n;|]+/);
+  const vistos = new Set();
+  return lista
+    .map(limpiarCodigo)
+    .filter(codigo => {
+      if (!codigo || vistos.has(codigo)) return false;
+      vistos.add(codigo);
+      return true;
+    });
+}
+
+function codigosProducto(p, incluirPrincipal = true) {
+  const vistos = new Set();
+  const lista = [];
+  const agregar = codigo => {
+    const limpio = limpiarCodigo(codigo);
+    if (!limpio || vistos.has(limpio)) return;
+    vistos.add(limpio);
+    lista.push(limpio);
+  };
+  if (incluirPrincipal) agregar(p?.codigo_barras || '');
+  codigosAlternativosProducto(p).forEach(agregar);
+  return lista;
+}
+
+function productoTieneCodigo(p, codigo) {
+  const buscado = limpiarCodigo(codigo);
+  return !!buscado && codigosProducto(p).includes(buscado);
+}
+
 function productoConCodigo(codigo, exceptoId = null) {
   const buscado = limpiarCodigo(codigo);
   if (!buscado) return null;
-  return productos.find(p => limpiarCodigo(p.codigo_barras) === buscado && p.id !== exceptoId) || null;
+  return productos.find(p => p.id !== exceptoId && productoTieneCodigo(p, buscado)) || null;
 }
 
 async function productoDuplicadoPorCodigoFirebase(codigo, exceptoId = null) {
@@ -3192,11 +3357,16 @@ async function productoDuplicadoPorCodigoFirebase(codigo, exceptoId = null) {
   const local = productoConCodigo(buscado, exceptoId);
   if (local) return local;
 
-  const snap = await getDocs(
-    query(collection(db(), 'productos'), where('codigo_barras', '==', buscado), limit(3))
-  );
-  const docRepetido = snap.docs.find(d => d.id !== exceptoId);
-  return docRepetido ? { id: docRepetido.id, ...docRepetido.data() } : null;
+  const consultas = [
+    query(collection(db(), 'productos'), where('codigo_barras', '==', buscado), limit(3)),
+    query(collection(db(), 'productos'), where('codigos_alternativos', 'array-contains', buscado), limit(3))
+  ];
+  const snaps = await Promise.all(consultas.map(q => getDocs(q)));
+  for (const snap of snaps) {
+    const docRepetido = snap.docs.find(d => d.id !== exceptoId);
+    if (docRepetido) return { id: docRepetido.id, ...docRepetido.data() };
+  }
+  return null;
 }
 
 function codigoProductoActual(p) {
@@ -3210,8 +3380,7 @@ function etiquetasCodigoRef() {
 function codigosOcupados() {
   const usados = new Set();
   productos.forEach(p => {
-    const codigo = codigoProductoActual(p);
-    if (codigo) usados.add(codigo);
+    codigosProducto(p).forEach(codigo => usados.add(codigo));
   });
   etiquetasCodigo.forEach(item => {
     const codigo = limpiarCodigo(item.codigo);
@@ -3265,7 +3434,7 @@ function actualizarCategoriasCodigo(preferida = categoriaCodigoSeleccionada()) {
 
 window.actualizarResumenCodigoCategoria = function() {
   const categoria = categoriaCodigoSeleccionada();
-  const total = productos.filter(p => !codigoProductoActual(p) && productoPasaCategoriaCodigo(p, categoria)).length;
+  const total = productos.filter(p => codigosProducto(p).length === 0 && productoPasaCategoriaCodigo(p, categoria)).length;
   showMsg('cod-msg', `${total} producto(s) sin codigo en ${categoriaCodigoNombre(categoria)}.`, 'ok');
 };
 
@@ -3520,13 +3689,14 @@ window.filtrarProductosCodigo = function() {
   if (!input || !cont) return;
 
   const q = input.value.trim().toLowerCase();
+  const qCode = limpiarCodigo(input.value);
   if (q.length < 1) { cont.innerHTML = ''; return; }
 
   const encontrados = productos
     .filter(p =>
       p.nombre.toLowerCase().includes(q) ||
       (p.categoria || '').toLowerCase().includes(q) ||
-      (p.codigo_barras || '').toLowerCase().includes(q))
+      (qCode && codigosProducto(p).some(codigo => codigo.includes(qCode))))
     .slice(0, 8);
 
   cont.innerHTML = encontrados.length === 0
@@ -3729,7 +3899,7 @@ async function prepararCodigosFaltantes() {
     productos = prods;
     actualizarCategoriasCodigo(categoriaKey);
     return {
-      faltantes: productos.filter(p => !codigoProductoActual(p) && productoPasaCategoriaCodigo(p, categoriaKey)),
+      faltantes: productos.filter(p => codigosProducto(p).length === 0 && productoPasaCategoriaCodigo(p, categoriaKey)),
       categoriaKey,
       categoriaNombre
     };
