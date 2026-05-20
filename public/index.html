@@ -396,6 +396,10 @@
           <select id="cod-categoria-filtro" onchange="actualizarResumenCodigoCategoria()">
             <option value="">Todas las categorías</option>
           </select>
+          <select id="cod-lote-mostrar-nombre" title="Nombre al imprimir etiquetas generadas en lote" aria-label="Nombre al imprimir etiquetas generadas en lote">
+            <option value="sin">Sin nombre</option>
+            <option value="con">Con nombre</option>
+          </select>
           <button class="btn-secondary" onclick="generarLoteCodigosFaltantes()">Generar lote 50</button>
           <button class="btn-secondary" onclick="generarTodosCodigosFaltantes()">Generar todos</button>
         </div>

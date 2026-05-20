@@ -1320,30 +1320,33 @@ input:focus, select:focus {
   }
   body.print-barcodes .barcode-label-card.barcode-label-with-name {
     justify-content: flex-start;
-    gap: 0.25mm;
-    padding-top: 0.6mm;
+    gap: 0.1mm;
+    padding-top: 0.35mm;
   }
   body.print-barcodes .barcode-label-card.barcode-label-with-name .barcode-label-top {
     display: block;
     width: 100%;
-    height: 2.4mm;
-    font-size: 3.8pt;
-    line-height: 1;
+    height: 4.8mm;
+    font-size: 6pt;
+    line-height: 1.05;
     letter-spacing: 0;
     text-align: center;
-    white-space: nowrap;
+    white-space: normal;
     overflow: hidden;
-    text-overflow: ellipsis;
+    overflow-wrap: anywhere;
     color: #000000;
   }
   body.print-barcodes .barcode-label-card.barcode-label-with-name .barcode-label-top strong {
-    display: block;
-    font-size: 3.8pt;
-    line-height: 1;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    width: 100%;
+    font-size: 6pt;
+    line-height: 1.05;
     font-weight: 700;
-    white-space: nowrap;
+    white-space: normal;
     overflow: hidden;
-    text-overflow: ellipsis;
+    overflow-wrap: anywhere;
   }
   body.print-barcodes .barcode-svg.small {
     width: 100%;
@@ -1352,7 +1355,7 @@ input:focus, select:focus {
     flex: 0 0 auto;
   }
   body.print-barcodes .barcode-label-card.barcode-label-with-name .barcode-svg.small {
-    height: 8.5mm;
+    height: 7.2mm;
   }
   body.print-barcodes .barcode-label-bottom {
     display: block;

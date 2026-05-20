@@ -3141,6 +3141,14 @@ function categoriaCodigoNombre(key = categoriaCodigoSeleccionada()) {
   return opt?.textContent || key;
 }
 
+function mostrarNombreLoteCodigoSeleccionado() {
+  return $('cod-lote-mostrar-nombre')?.value === 'con';
+}
+
+function textoModoNombreEtiqueta(mostrarNombre) {
+  return mostrarNombre ? 'con nombre' : 'sin nombre';
+}
+
 function actualizarCategoriasCodigo(preferida = categoriaCodigoSeleccionada()) {
   const select = $('cod-categoria-filtro');
   if (!select) return;
@@ -3477,9 +3485,10 @@ async function prepararCodigosFaltantes() {
   }
 }
 
-async function procesarLoteCodigosFaltantes(lote) {
+async function procesarLoteCodigosFaltantes(lote, opciones = {}) {
   if (!lote || lote.length === 0) return { procesados: 0, nuevasEtiquetas: [] };
 
+  const mostrarNombre = opciones.mostrarNombre === true;
   const usados = codigosOcupados();
   const batch = writeBatch(db());
   const nuevasEtiquetas = [];
@@ -3488,7 +3497,7 @@ async function procesarLoteCodigosFaltantes(lote) {
 
   lote.forEach(p => {
     const codigo = crearCodigoUnico(usados);
-    const etiqueta = datosEtiquetaCodigo(p, codigo);
+    const etiqueta = datosEtiquetaCodigo(p, codigo, mostrarNombre);
     const etiquetasExistentes = etiquetasPendientesDeProducto(p.id);
     let actualizoExistente = false;
 
@@ -3542,13 +3551,15 @@ window.generarLoteCodigosFaltantes = async function() {
   }
 
   const lote = faltantes.slice(0, COD_BATCH_SIZE);
+  const mostrarNombre = mostrarNombreLoteCodigoSeleccionado();
+  const modoNombre = textoModoNombreEtiqueta(mostrarNombre);
   const escrituras = lote.length * 2;
-  if (!confirm(`Generar codigos secuenciales para ${lote.length} producto(s) sin codigo${alcance}? Se valida contra todas las categorias y etiquetas pendientes. Aproximado: ${escrituras} escrituras.`)) return;
+  if (!confirm(`Generar codigos secuenciales para ${lote.length} producto(s) sin codigo${alcance}, con etiquetas ${modoNombre}? Se valida contra todas las categorias y etiquetas pendientes. Aproximado: ${escrituras} escrituras.`)) return;
 
   try {
-    const r = await procesarLoteCodigosFaltantes(lote);
+    const r = await procesarLoteCodigosFaltantes(lote, { mostrarNombre });
     const quedan = Math.max(0, faltantes.length - r.procesados);
-    showMsg('cod-msg', `Lote listo: ${r.procesados} producto(s). Quedan ${quedan} sin codigo${alcance}.`, 'ok');
+    showMsg('cod-msg', `Lote listo: ${r.procesados} producto(s), etiquetas ${modoNombre}. Quedan ${quedan} sin codigo${alcance}.`, 'ok');
   } catch (e) {
     console.warn('No se pudo generar lote de codigos:', e.message || e);
     showMsg('cod-msg', 'No se pudo guardar el lote en Firebase.', 'error');
@@ -3570,19 +3581,21 @@ window.generarTodosCodigosFaltantes = async function() {
   }
 
   const lotes = Math.ceil(faltantes.length / COD_BATCH_SIZE);
+  const mostrarNombre = mostrarNombreLoteCodigoSeleccionado();
+  const modoNombre = textoModoNombreEtiqueta(mostrarNombre);
   const escrituras = faltantes.length * 2;
-  if (!confirm(`Generar codigos secuenciales para TODOS los ${faltantes.length} producto(s) sin codigo${alcance}, en ${lotes} lote(s) de ${COD_BATCH_SIZE}? Se valida contra todas las categorias y etiquetas pendientes. Aproximado: ${escrituras} escrituras.`)) return;
+  if (!confirm(`Generar codigos secuenciales para TODOS los ${faltantes.length} producto(s) sin codigo${alcance}, en ${lotes} lote(s) de ${COD_BATCH_SIZE}, con etiquetas ${modoNombre}? Se valida contra todas las categorias y etiquetas pendientes. Aproximado: ${escrituras} escrituras.`)) return;
 
   let procesados = 0;
   try {
     for (let i = 0; i < faltantes.length; i += COD_BATCH_SIZE) {
       const lote = faltantes.slice(i, i + COD_BATCH_SIZE);
-      const r = await procesarLoteCodigosFaltantes(lote);
+      const r = await procesarLoteCodigosFaltantes(lote, { mostrarNombre });
       procesados += r.procesados;
       showMsg('cod-msg', `Generando codigos${alcance}: ${procesados}/${faltantes.length}`, 'ok');
       await pausa(250);
     }
-    showMsg('cod-msg', `Listo: ${procesados} producto(s) con codigo y etiqueta pendiente${alcance}.`, 'ok');
+    showMsg('cod-msg', `Listo: ${procesados} producto(s) con codigo y etiqueta pendiente ${modoNombre}${alcance}.`, 'ok');
   } catch (e) {
     console.warn('No se pudieron generar todos los codigos:', e.message || e);
     showMsg('cod-msg', `Se detuvo el proceso. Guardados antes del error: ${procesados}.`, 'error');

@@ -1,4 +1,5 @@
 node_modules/
+.firebase/
 db/tienda.db
 db/tienda.db-shm
 db/tienda.db-wal
