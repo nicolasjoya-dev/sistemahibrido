@@ -260,7 +260,13 @@
     <div class="search-bar inv-search-row">
       <input type="text" id="inv-search" placeholder="Buscar producto…" oninput="filtrarInventario(true)"/>
       <button type="button" class="btn-secondary scan-btn mobile-scan-btn" onclick="abrirEscanerInventario()">Escanear</button>
-      <select id="inv-categoria-filtro" onchange="filtrarInventario()">
+      <div class="filter-dropdown inv-category-filter" id="inv-category-filter">
+        <button type="button" class="filter-trigger" id="inv-categoria-trigger" onclick="toggleInventarioCategoriaMenu()" aria-expanded="false">
+          Todas las categorias
+        </button>
+        <div class="filter-menu" id="inv-categoria-menu"></div>
+      </div>
+      <select id="inv-categoria-filtro" onchange="filtrarInventario()" hidden>
         <option value="">Todas las categorias</option>
       </select>
       <select id="inv-codigo-filtro" onchange="filtrarInventario()">

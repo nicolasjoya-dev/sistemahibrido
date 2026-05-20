@@ -714,13 +714,58 @@ function categoriasInventarioDisponibles() {
 
 function actualizarCategoriasInventario(preferida = invCategoriaFiltro) {
   const select = $('inv-categoria-filtro');
-  if (!select) return;
+  const trigger = $('inv-categoria-trigger');
+  const menu = $('inv-categoria-menu');
   const categorias = categoriasInventarioDisponibles();
-  select.innerHTML = '<option value="">Todas las categorias</option>' +
-    categorias.map(c => `<option value="${escapeHtml(c.key)}">${escapeHtml(c.nombre)}</option>`).join('');
-  select.value = categorias.some(c => c.key === preferida) ? preferida : '';
-  invCategoriaFiltro = select.value;
+  const activa = categorias.some(c => c.key === preferida) ? preferida : '';
+
+  if (select) {
+    select.innerHTML = '<option value="">Todas las categorias</option>' +
+      categorias.map(c => `<option value="${escapeHtml(c.key)}">${escapeHtml(c.nombre)}</option>`).join('');
+    select.value = activa;
+  }
+
+  invCategoriaFiltro = activa;
+
+  const nombreActivo = activa
+    ? (categorias.find(c => c.key === activa)?.nombre || 'Categoria')
+    : 'Todas las categorias';
+  if (trigger) {
+    trigger.textContent = nombreActivo;
+    trigger.setAttribute('aria-expanded', $('inv-category-filter')?.classList.contains('open') ? 'true' : 'false');
+  }
+  if (menu) {
+    const opciones = [{ key: '', nombre: 'Todas las categorias' }, ...categorias];
+    menu.innerHTML = opciones.map(c => `
+      <button type="button" class="filter-option ${c.key === activa ? 'active' : ''}" onclick="seleccionarCategoriaInventario('${escapeJsString(c.key)}')">
+        ${escapeHtml(c.nombre)}
+      </button>
+    `).join('');
+  }
 }
+
+window.toggleInventarioCategoriaMenu = function() {
+  const wrap = $('inv-category-filter');
+  if (!wrap) return;
+  const abierto = wrap.classList.toggle('open');
+  $('inv-categoria-trigger')?.setAttribute('aria-expanded', abierto ? 'true' : 'false');
+};
+
+window.seleccionarCategoriaInventario = function(key) {
+  invCategoriaFiltro = key || '';
+  const select = $('inv-categoria-filtro');
+  if (select) select.value = invCategoriaFiltro;
+  $('inv-category-filter')?.classList.remove('open');
+  $('inv-categoria-trigger')?.setAttribute('aria-expanded', 'false');
+  filtrarInventario();
+};
+
+document.addEventListener('click', e => {
+  const wrap = $('inv-category-filter');
+  if (!wrap || wrap.contains(e.target)) return;
+  wrap.classList.remove('open');
+  $('inv-categoria-trigger')?.setAttribute('aria-expanded', 'false');
+});
 
 function productosInventarioFiltrados() {
   return productos.filter(p => {
