@@ -3189,13 +3189,14 @@ function etiquetasPendientesDeProducto(productoId, codigo = '') {
     item.producto_id === productoId && (!buscado || limpiarCodigo(item.codigo) === buscado));
 }
 
-function datosEtiquetaCodigo(p, codigo) {
+function datosEtiquetaCodigo(p, codigo, mostrarNombre = false) {
   return {
     producto_id: p.id,
     nombre: p.nombre,
     codigo,
     precio_venta: p.precio_venta || 0,
-    guardado_en_producto: true
+    guardado_en_producto: true,
+    mostrar_nombre: mostrarNombre
   };
 }
 
@@ -3378,6 +3379,7 @@ window.agregarEtiquetaCodigo = async function() {
 
   const cantidad = Math.max(1, Math.min(100, parseInt($('cod-cantidad').value, 10) || 1));
   const guardadoEnProducto = codigoProductoActual(p) === codigo;
+  const mostrarNombre = $('cod-mostrar-nombre')?.value === 'con';
   const batch = writeBatch(db());
   const nuevas = [];
   for (let i = 0; i < cantidad; i++) {
@@ -3387,7 +3389,8 @@ window.agregarEtiquetaCodigo = async function() {
       nombre: p.nombre,
       codigo,
       precio_venta: p.precio_venta || 0,
-      guardado_en_producto: guardadoEnProducto
+      guardado_en_producto: guardadoEnProducto,
+      mostrar_nombre: mostrarNombre
     };
     batch.set(ref, { ...etiqueta, creado: serverTimestamp() });
     nuevas.push({ id: ref.id, ...etiqueta });
@@ -3410,10 +3413,13 @@ function etiquetaCodigoHtml(item, i, modo = 'lista') {
   const borrarCodigo = modo === 'print' ? '' : `<button class="btn-icon del" onclick="borrarCodigoEtiqueta(${i})">Borrar codigo</button>`;
   const acciones = modo === 'print' ? '' : `<div class="barcode-label-buttons">${quitar}${borrarCodigo}</div>`;
   const pendiente = modo === 'print' || item.guardado_en_producto !== false ? '' : '<span class="badge badge-bajo" style="font-size:0.68rem">Pendiente</span>';
-  return `<div class="barcode-label-card">
+  const mostrarNombre = item.mostrar_nombre === true;
+  const nombreEstado = modo === 'print' || !mostrarNombre ? '' : '<span class="badge badge-ok" style="font-size:0.68rem">Con nombre</span>';
+  return `<div class="barcode-label-card ${mostrarNombre ? 'barcode-label-with-name' : ''}">
     <div class="barcode-label-top">
       <strong>${escapeHtml(item.nombre)}</strong>
       ${pendiente}
+      ${nombreEstado}
       ${acciones}
     </div>
     <svg id="${svgId}" class="barcode-svg small" role="img" aria-label="Código de barras ${escapeHtml(item.codigo)}"></svg>
