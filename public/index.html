@@ -260,6 +260,9 @@
     <div class="search-bar inv-search-row">
       <input type="text" id="inv-search" placeholder="Buscar producto…" oninput="filtrarInventario(true)"/>
       <button type="button" class="btn-secondary scan-btn mobile-scan-btn" onclick="abrirEscanerInventario()">Escanear</button>
+      <select id="inv-categoria-filtro" onchange="filtrarInventario()">
+        <option value="">Todas las categorias</option>
+      </select>
       <select id="inv-codigo-filtro" onchange="filtrarInventario()">
         <option value="todos">Todos</option>
         <option value="con">Con código</option>
@@ -664,6 +667,35 @@
     <div class="modal-actions">
       <button class="btn-secondary" onclick="closeModal('modal-producto')">Cancelar</button>
       <button class="btn-primary" id="modal-save-btn" onclick="guardarProducto()">Guardar</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="modal-codigos-preview">
+  <div class="modal barcode-batch-modal">
+    <div class="modal-header">
+      <h2>Previsualizar etiquetas</h2>
+      <button class="modal-close" onclick="closeModal('modal-codigos-preview')">✕</button>
+    </div>
+    <div id="cod-preview-lote-msg"></div>
+    <p id="cod-preview-lote-resumen" class="barcode-batch-summary"></p>
+    <div class="barcode-batch-table-wrap">
+      <table class="data-table barcode-batch-table">
+        <thead>
+          <tr>
+            <th>Producto</th>
+            <th>Categoria</th>
+            <th>Codigo</th>
+            <th>Etiquetas</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="cod-preview-lote-body"></tbody>
+      </table>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-secondary" onclick="closeModal('modal-codigos-preview')">Cancelar</button>
+      <button class="btn-primary" id="cod-preview-lote-confirmar" onclick="confirmarPreviewCodigosLote()">Confirmar generacion</button>
     </div>
   </div>
 </div>

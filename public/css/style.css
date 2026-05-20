@@ -741,6 +741,35 @@ input:focus, select:focus {
   width: auto;
   flex: 0 0 auto;
 }
+.barcode-batch-modal {
+  max-width: 980px;
+  width: 96vw;
+}
+.barcode-batch-summary {
+  margin: 0 0 14px;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+.barcode-batch-table-wrap {
+  max-height: 58vh;
+  overflow: auto;
+  margin-bottom: 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.barcode-batch-table {
+  min-width: 720px;
+}
+.barcode-batch-code {
+  font-family: var(--font-head);
+  font-weight: 800;
+  color: var(--teal);
+}
+.barcode-batch-qty {
+  width: 86px;
+  min-width: 86px;
+  padding: 8px 10px;
+}
 .barcode-suggestions { position: relative; }
 .barcode-empty {
   padding: 14px;

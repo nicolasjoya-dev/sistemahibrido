@@ -241,11 +241,13 @@ const INV_SCAN_CLEAR_MS = 5000;
 let invPagina = 0;
 let invFiltro = '';
 let invCodigoFiltro = 'todos';
+let invCategoriaFiltro = '';
 let invUltimoCodigoEscaneado = '';
 let invUltimoCodigoEscaneadoEn = 0;
 let auditoriaIgnorados = new Map();
 let auditoriaIgnoradosCargados = false;
 let auditoriaIssuesActuales = new Map();
+let codigosLotePreview = null;
 
 // ── Connection status ─────────────────────────────────
 function updateConnStatus() {
@@ -693,6 +695,33 @@ window.anularVenta = async function(ventaId) {
 /* ═══════════════════════════════════════════════════════
    INVENTARIO  — paginado + búsqueda local (sin re-leer Firestore)
 ═══════════════════════════════════════════════════════ */
+function categoriaKeyInventario(categoria) {
+  return String(categoria || '').trim().toLowerCase();
+}
+
+function categoriasInventarioDisponibles() {
+  const mapa = new Map();
+  productos.forEach(p => {
+    const nombre = String(p.categoria || '').trim();
+    if (!nombre) return;
+    const key = categoriaKeyInventario(nombre);
+    if (!mapa.has(key)) mapa.set(key, nombre);
+  });
+  return [...mapa.entries()]
+    .map(([key, nombre]) => ({ key, nombre }))
+    .sort((a, b) => a.nombre.localeCompare(b.nombre));
+}
+
+function actualizarCategoriasInventario(preferida = invCategoriaFiltro) {
+  const select = $('inv-categoria-filtro');
+  if (!select) return;
+  const categorias = categoriasInventarioDisponibles();
+  select.innerHTML = '<option value="">Todas las categorias</option>' +
+    categorias.map(c => `<option value="${escapeHtml(c.key)}">${escapeHtml(c.nombre)}</option>`).join('');
+  select.value = categorias.some(c => c.key === preferida) ? preferida : '';
+  invCategoriaFiltro = select.value;
+}
+
 function productosInventarioFiltrados() {
   return productos.filter(p => {
     const codigo = (p.codigo_barras || '').trim();
@@ -700,15 +729,18 @@ function productosInventarioFiltrados() {
       p.nombre.toLowerCase().includes(invFiltro) ||
       (p.categoria || '').toLowerCase().includes(invFiltro) ||
       codigo.toLowerCase().includes(invFiltro);
+    const coincideCategoria = !invCategoriaFiltro ||
+      categoriaKeyInventario(p.categoria) === invCategoriaFiltro;
     const coincideCodigo =
       invCodigoFiltro === 'todos' ||
       (invCodigoFiltro === 'con' && codigo) ||
       (invCodigoFiltro === 'sin' && !codigo);
-    return coincideTexto && coincideCodigo;
+    return coincideTexto && coincideCategoria && coincideCodigo;
   });
 }
 
 function renderInventarioPaginado() {
+  actualizarCategoriasInventario();
   const lista   = productosInventarioFiltrados();
 
   const total   = lista.length;
@@ -808,6 +840,7 @@ window.filtrarInventario = function(desdeBusqueda = false) {
       resetEscaneoInventario();
       invFiltro = '';
       invCodigoFiltro = $('inv-codigo-filtro')?.value || 'todos';
+      invCategoriaFiltro = $('inv-categoria-filtro')?.value || '';
       invPagina = 0;
       renderInventarioPaginado();
       showMsg('inv-msg', `Busqueda limpiada: ${codigoLimpiado} escaneado dos veces.`, 'ok');
@@ -816,6 +849,7 @@ window.filtrarInventario = function(desdeBusqueda = false) {
   }
   invFiltro = valor.toLowerCase().trim();
   invCodigoFiltro = $('inv-codigo-filtro')?.value || 'todos';
+  invCategoriaFiltro = $('inv-categoria-filtro')?.value || '';
   const productoExacto = limpio && productos.find(p => limpiarCodigo(p.codigo_barras || '') === limpio);
   if (productoExacto) {
     invUltimoCodigoEscaneado = limpio;
@@ -3208,6 +3242,90 @@ function datosEtiquetaCodigo(p, codigo, mostrarNombre = false) {
   };
 }
 
+function cantidadEtiquetaLoteSegura(value) {
+  const n = parseInt(value, 10);
+  if (!Number.isFinite(n)) return 1;
+  return Math.max(0, Math.min(100, n));
+}
+
+function codigoOcupadoPorOtro(codigo, productoId) {
+  return !!productoConCodigo(codigo, productoId) || codigoUsadoEnOtraEtiqueta(codigo, productoId);
+}
+
+function construirPreviewCodigosFaltantes(faltantes) {
+  const usados = codigosOcupados();
+  return faltantes.map(p => {
+    const codigo = crearCodigoUnico(usados);
+    usados.add(codigo);
+    return {
+      productoId: p.id,
+      nombre: p.nombre,
+      categoria: p.categoria || '',
+      precio_venta: p.precio_venta || 0,
+      codigo,
+      cantidad: 1
+    };
+  });
+}
+
+function totalEtiquetasPreview() {
+  return (codigosLotePreview?.items || []).reduce((total, item) =>
+    total + cantidadEtiquetaLoteSegura(item.cantidad), 0);
+}
+
+function renderPreviewCodigosLote() {
+  const tbody = $('cod-preview-lote-body');
+  const resumen = $('cod-preview-lote-resumen');
+  if (!tbody || !resumen || !codigosLotePreview) return;
+
+  const items = codigosLotePreview.items || [];
+  const modoNombre = textoModoNombreEtiqueta(codigosLotePreview.mostrarNombre);
+  const alcance = codigosLotePreview.alcance || '';
+  resumen.textContent = `${items.length} producto(s)${alcance}. Etiquetas ${modoNombre}. Total etiquetas: ${totalEtiquetasPreview()}.`;
+
+  if (items.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="5" class="empty">No hay productos en esta previsualizacion</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = items.map((item, i) => `
+    <tr>
+      <td><strong>${escapeHtml(item.nombre)}</strong></td>
+      <td>${escapeHtml(item.categoria || 'Sin categoria')}</td>
+      <td><span class="barcode-batch-code">${escapeHtml(item.codigo)}</span></td>
+      <td>
+        <input class="barcode-batch-qty" type="number" min="0" max="100" value="${cantidadEtiquetaLoteSegura(item.cantidad)}" onchange="actualizarCantidadPreviewCodigo(${i}, this.value)" oninput="actualizarCantidadPreviewCodigo(${i}, this.value)"/>
+      </td>
+      <td><button class="btn-icon del" onclick="quitarProductoPreviewCodigo(${i})">Quitar</button></td>
+    </tr>
+  `).join('');
+}
+
+function abrirPreviewCodigosFaltantes(faltantes, opciones) {
+  const items = construirPreviewCodigosFaltantes(faltantes);
+  codigosLotePreview = { ...opciones, items };
+  if ($('cod-preview-lote-msg')) $('cod-preview-lote-msg').innerHTML = '';
+  renderPreviewCodigosLote();
+  openModal('modal-codigos-preview');
+}
+
+window.actualizarCantidadPreviewCodigo = function(index, value) {
+  if (!codigosLotePreview?.items?.[index]) return;
+  codigosLotePreview.items[index].cantidad = cantidadEtiquetaLoteSegura(value);
+  const resumen = $('cod-preview-lote-resumen');
+  if (resumen) {
+    const modoNombre = textoModoNombreEtiqueta(codigosLotePreview.mostrarNombre);
+    const alcance = codigosLotePreview.alcance || '';
+    resumen.textContent = `${codigosLotePreview.items.length} producto(s)${alcance}. Etiquetas ${modoNombre}. Total etiquetas: ${totalEtiquetasPreview()}.`;
+  }
+};
+
+window.quitarProductoPreviewCodigo = function(index) {
+  if (!codigosLotePreview?.items) return;
+  codigosLotePreview.items.splice(index, 1);
+  renderPreviewCodigosLote();
+};
+
 function crearCodigoUnico(usados = codigosOcupados()) {
   return siguienteCodigoSecuencial(usados);
 }
@@ -3485,59 +3603,109 @@ async function prepararCodigosFaltantes() {
   }
 }
 
+async function commitOperacionesCodigo(operaciones) {
+  const MAX_OPS = 450;
+  for (let i = 0; i < operaciones.length; i += MAX_OPS) {
+    const batch = writeBatch(db());
+    operaciones.slice(i, i + MAX_OPS).forEach(op => {
+      if (op.tipo === 'set' && op.options) batch.set(op.ref, op.data, op.options);
+      if (op.tipo === 'set' && !op.options) batch.set(op.ref, op.data);
+      if (op.tipo === 'update') batch.update(op.ref, op.data);
+      if (op.tipo === 'delete') batch.delete(op.ref);
+    });
+    await batch.commit();
+  }
+}
+
 async function procesarLoteCodigosFaltantes(lote, opciones = {}) {
   if (!lote || lote.length === 0) return { procesados: 0, nuevasEtiquetas: [] };
 
   const mostrarNombre = opciones.mostrarNombre === true;
   const usados = codigosOcupados();
-  const batch = writeBatch(db());
+  const operaciones = [];
   const nuevasEtiquetas = [];
   const etiquetasActualizadas = [];
+  const etiquetasEliminadas = new Set();
   const actualizados = [];
 
-  lote.forEach(p => {
-    const codigo = crearCodigoUnico(usados);
+  lote.forEach(item => {
+    const p = item.producto || productos.find(x => x.id === item.productoId) || item;
+    if (!p?.id) return;
+    const cantidad = cantidadEtiquetaLoteSegura(item.cantidad ?? 1);
+    if (cantidad <= 0) return;
+    let codigo = limpiarCodigo(item.codigo || '');
+    if (!codigo || codigoOcupadoPorOtro(codigo, p.id) || usados.has(codigo)) {
+      codigo = crearCodigoUnico(usados);
+    }
+    usados.add(codigo);
     const etiqueta = datosEtiquetaCodigo(p, codigo, mostrarNombre);
     const etiquetasExistentes = etiquetasPendientesDeProducto(p.id);
-    let actualizoExistente = false;
 
-    etiquetasExistentes.forEach(item => {
-      if (!item.id) return;
-      batch.set(doc(db(), 'etiquetas_codigos', item.id), {
-        ...etiqueta,
-        actualizado: serverTimestamp()
-      }, { merge: true });
-      etiquetasActualizadas.push({ id: item.id, ...etiqueta });
-      actualizoExistente = true;
-    });
-
-    if (!actualizoExistente) {
-      const ref = doc(etiquetasCodigoRef());
-      batch.set(ref, { ...etiqueta, creado: serverTimestamp() });
-      nuevasEtiquetas.push({ id: ref.id, ...etiqueta });
+    for (let i = 0; i < cantidad; i++) {
+      const existente = etiquetasExistentes[i];
+      if (existente?.id) {
+        operaciones.push({
+          tipo: 'set',
+          ref: doc(db(), 'etiquetas_codigos', existente.id),
+          data: {
+            ...etiqueta,
+            actualizado: serverTimestamp()
+          },
+          options: { merge: true }
+        });
+        etiquetasActualizadas.push({ id: existente.id, ...etiqueta });
+      } else {
+        const ref = doc(etiquetasCodigoRef());
+        operaciones.push({
+          tipo: 'set',
+          ref,
+          data: { ...etiqueta, creado: serverTimestamp() }
+        });
+        nuevasEtiquetas.push({ id: ref.id, ...etiqueta });
+      }
     }
 
-    usados.add(codigo);
-    batch.update(doc(db(), 'productos', p.id), { codigo_barras: codigo });
+    etiquetasExistentes.slice(cantidad).forEach(existente => {
+      if (!existente.id) return;
+      operaciones.push({
+        tipo: 'delete',
+        ref: doc(db(), 'etiquetas_codigos', existente.id)
+      });
+      etiquetasEliminadas.add(existente.id);
+    });
+
+    operaciones.push({
+      tipo: 'update',
+      ref: doc(db(), 'productos', p.id),
+      data: { codigo_barras: codigo }
+    });
     actualizados.push({ productoId: p.id, nombre: p.nombre, precio_venta: p.precio_venta || 0, codigo });
   });
 
-  await batch.commit();
+  await commitOperacionesCodigo(operaciones);
 
   actualizados.forEach(item => actualizarCodigoLocal(item.productoId, item.codigo));
-  etiquetasCodigo = etiquetasCodigo.map(item => {
-    const actualizado = etiquetasActualizadas.find(et => et.id === item.id);
-    return actualizado
-      ? { ...item, ...actualizado, guardado_en_producto: true }
-      : item;
-  });
+  const actualizadasMap = new Map(etiquetasActualizadas.map(item => [item.id, item]));
+  etiquetasCodigo = etiquetasCodigo
+    .filter(item => !etiquetasEliminadas.has(item.id))
+    .map(item => {
+      const actualizado = actualizadasMap.get(item.id);
+      return actualizado
+        ? { ...item, ...actualizado, guardado_en_producto: true }
+        : item;
+    });
   etiquetasCodigo.push(...nuevasEtiquetas);
   etiquetasCodigoCargadas = true;
   renderEtiquetasCodigo();
   renderInventarioPaginado();
   actualizarPreviewCodigo();
 
-  return { procesados: actualizados.length, nuevasEtiquetas };
+  return {
+    procesados: actualizados.length,
+    nuevasEtiquetas,
+    totalEtiquetas: nuevasEtiquetas.length + etiquetasActualizadas.length,
+    escrituras: operaciones.length
+  };
 }
 
 window.generarLoteCodigosFaltantes = async function() {
@@ -3552,23 +3720,15 @@ window.generarLoteCodigosFaltantes = async function() {
 
   const lote = faltantes.slice(0, COD_BATCH_SIZE);
   const mostrarNombre = mostrarNombreLoteCodigoSeleccionado();
-  const modoNombre = textoModoNombreEtiqueta(mostrarNombre);
-  const escrituras = lote.length * 2;
-  if (!confirm(`Generar codigos secuenciales para ${lote.length} producto(s) sin codigo${alcance}, con etiquetas ${modoNombre}? Se valida contra todas las categorias y etiquetas pendientes. Aproximado: ${escrituras} escrituras.`)) return;
-
-  try {
-    const r = await procesarLoteCodigosFaltantes(lote, { mostrarNombre });
-    const quedan = Math.max(0, faltantes.length - r.procesados);
-    showMsg('cod-msg', `Lote listo: ${r.procesados} producto(s), etiquetas ${modoNombre}. Quedan ${quedan} sin codigo${alcance}.`, 'ok');
-  } catch (e) {
-    console.warn('No se pudo generar lote de codigos:', e.message || e);
-    showMsg('cod-msg', 'No se pudo guardar el lote en Firebase.', 'error');
-  }
+  abrirPreviewCodigosFaltantes(lote, {
+    tipo: 'lote',
+    mostrarNombre,
+    categoriaKey,
+    categoriaNombre,
+    alcance,
+    totalFaltantes: faltantes.length
+  });
 };
-
-function pausa(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
 
 window.generarTodosCodigosFaltantes = async function() {
   const prep = await prepararCodigosFaltantes();
@@ -3580,25 +3740,48 @@ window.generarTodosCodigosFaltantes = async function() {
     return;
   }
 
-  const lotes = Math.ceil(faltantes.length / COD_BATCH_SIZE);
   const mostrarNombre = mostrarNombreLoteCodigoSeleccionado();
-  const modoNombre = textoModoNombreEtiqueta(mostrarNombre);
-  const escrituras = faltantes.length * 2;
-  if (!confirm(`Generar codigos secuenciales para TODOS los ${faltantes.length} producto(s) sin codigo${alcance}, en ${lotes} lote(s) de ${COD_BATCH_SIZE}, con etiquetas ${modoNombre}? Se valida contra todas las categorias y etiquetas pendientes. Aproximado: ${escrituras} escrituras.`)) return;
+  abrirPreviewCodigosFaltantes(faltantes, {
+    tipo: 'todos',
+    mostrarNombre,
+    categoriaKey,
+    categoriaNombre,
+    alcance,
+    totalFaltantes: faltantes.length
+  });
+};
 
-  let procesados = 0;
+window.confirmarPreviewCodigosLote = async function() {
+  if (!codigosLotePreview?.items) {
+    showMsg('cod-preview-lote-msg', 'No hay una previsualizacion activa.', 'error');
+    return;
+  }
+
+  const items = codigosLotePreview.items
+    .map(item => ({ ...item, cantidad: cantidadEtiquetaLoteSegura(item.cantidad) }))
+    .filter(item => item.cantidad > 0);
+
+  if (items.length === 0) {
+    showMsg('cod-preview-lote-msg', 'Deja al menos un producto con una etiqueta.', 'error');
+    return;
+  }
+
+  const btn = $('cod-preview-lote-confirmar');
+  if (btn) btn.disabled = true;
+  showMsg('cod-preview-lote-msg', 'Guardando codigos y etiquetas en Firebase...', 'ok');
+
   try {
-    for (let i = 0; i < faltantes.length; i += COD_BATCH_SIZE) {
-      const lote = faltantes.slice(i, i + COD_BATCH_SIZE);
-      const r = await procesarLoteCodigosFaltantes(lote, { mostrarNombre });
-      procesados += r.procesados;
-      showMsg('cod-msg', `Generando codigos${alcance}: ${procesados}/${faltantes.length}`, 'ok');
-      await pausa(250);
-    }
-    showMsg('cod-msg', `Listo: ${procesados} producto(s) con codigo y etiqueta pendiente ${modoNombre}${alcance}.`, 'ok');
+    const r = await procesarLoteCodigosFaltantes(items, { mostrarNombre: codigosLotePreview.mostrarNombre });
+    const alcance = codigosLotePreview.alcance || '';
+    const modoNombre = textoModoNombreEtiqueta(codigosLotePreview.mostrarNombre);
+    closeModal('modal-codigos-preview');
+    showMsg('cod-msg', `Listo: ${r.procesados} producto(s), ${r.totalEtiquetas} etiqueta(s) ${modoNombre}${alcance}.`, 'ok');
+    codigosLotePreview = null;
   } catch (e) {
-    console.warn('No se pudieron generar todos los codigos:', e.message || e);
-    showMsg('cod-msg', `Se detuvo el proceso. Guardados antes del error: ${procesados}.`, 'error');
+    console.warn('No se pudo confirmar la previsualizacion de codigos:', e.message || e);
+    showMsg('cod-preview-lote-msg', 'No se pudieron guardar los codigos en Firebase.', 'error');
+  } finally {
+    if (btn) btn.disabled = false;
   }
 };
 
