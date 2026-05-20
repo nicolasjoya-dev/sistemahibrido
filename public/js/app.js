@@ -215,6 +215,7 @@ let productos = [];   // alias local del caché
 let anchetas  = [];
 let carrito   = [];
 let editandoProductoId  = null;
+let productoGuardando   = false;
 let entradaProductoId   = null;
 let productoParaCarrito = null;
 let anchetaParaCarrito  = null;
@@ -1209,6 +1210,8 @@ window.openModalProducto = function(id) {
       calcMargen();
     }
   }
+  productoGuardando = false;
+  if ($('modal-save-btn')) $('modal-save-btn').disabled = false;
   openModal('modal-producto');
 };
 
@@ -1233,7 +1236,7 @@ window.calcMargen = function() {
   }
 };
 
-window.guardarProducto = async function() {
+async function guardarProductoInterno() {
   const nombre       = $('p-nombre').value.trim();
   const precio_venta = parseFloat($('p-venta').value);
   const codigoBarras = limpiarCodigo($('p-barras').value.trim() || '');
@@ -1280,6 +1283,29 @@ window.guardarProducto = async function() {
   renderInventarioPaginado();
   actualizarCategoriasCodigo();
   if ($('tab-auditoria')?.classList.contains('active')) loadAuditoria(true);
+}
+
+window.guardarProducto = async function() {
+  if (productoGuardando) return;
+  const saveBtn = $('modal-save-btn');
+  productoGuardando = true;
+  if (saveBtn) {
+    saveBtn.disabled = true;
+    saveBtn.textContent = editandoProductoId ? 'Actualizando...' : 'Guardando...';
+  }
+
+  try {
+    await guardarProductoInterno();
+  } catch (e) {
+    console.warn('No se pudo guardar producto:', e.message || e);
+    showMsg('modal-msg', 'No se pudo guardar. Revisa la conexion e intenta de nuevo.', 'error');
+  } finally {
+    productoGuardando = false;
+    if (saveBtn) {
+      saveBtn.disabled = false;
+      saveBtn.textContent = editandoProductoId ? 'Actualizar' : 'Guardar';
+    }
+  }
 };
 
 function setScannerMsg(text, type = 'ok') {
@@ -3313,9 +3339,38 @@ function construirPreviewCodigosFaltantes(faltantes) {
   });
 }
 
+function construirPreviewEtiquetasExistentes(lista) {
+  return lista.map(p => ({
+    productoId: p.id,
+    nombre: p.nombre,
+    categoria: p.categoria || '',
+    precio_venta: p.precio_venta || 0,
+    codigo: codigoProductoActual(p),
+    cantidad: 1
+  }));
+}
+
 function totalEtiquetasPreview() {
   return (codigosLotePreview?.items || []).reduce((total, item) =>
     total + cantidadEtiquetaLoteSegura(item.cantidad), 0);
+}
+
+function expandirEtiquetasPreview(items, mostrarNombre) {
+  const etiquetas = [];
+  items.forEach(item => {
+    const cantidad = cantidadEtiquetaLoteSegura(item.cantidad);
+    for (let i = 0; i < cantidad; i++) {
+      etiquetas.push({
+        producto_id: item.productoId,
+        nombre: item.nombre,
+        codigo: item.codigo,
+        precio_venta: item.precio_venta || 0,
+        guardado_en_producto: true,
+        mostrar_nombre: mostrarNombre
+      });
+    }
+  });
+  return etiquetas;
 }
 
 function renderPreviewCodigosLote() {
@@ -3326,7 +3381,14 @@ function renderPreviewCodigosLote() {
   const items = codigosLotePreview.items || [];
   const modoNombre = textoModoNombreEtiqueta(codigosLotePreview.mostrarNombre);
   const alcance = codigosLotePreview.alcance || '';
-  resumen.textContent = `${items.length} producto(s)${alcance}. Etiquetas ${modoNombre}. Total etiquetas: ${totalEtiquetasPreview()}.`;
+  const esImpresion = codigosLotePreview.tipo === 'imprimir';
+  const titulo = $('cod-preview-lote-titulo');
+  const btn = $('cod-preview-lote-confirmar');
+  if (titulo) titulo.textContent = esImpresion ? 'Imprimir etiquetas existentes' : 'Previsualizar codigos';
+  if (btn) btn.textContent = esImpresion ? 'Imprimir etiquetas' : 'Confirmar generacion';
+  resumen.textContent = esImpresion
+    ? `${items.length} producto(s) con codigo${alcance}. Etiquetas ${modoNombre}. Total etiquetas: ${totalEtiquetasPreview()}.`
+    : `${items.length} producto(s)${alcance}. Etiquetas ${modoNombre}. Total etiquetas: ${totalEtiquetasPreview()}.`;
 
   if (items.length === 0) {
     tbody.innerHTML = '<tr><td colspan="5" class="empty">No hay productos en esta previsualizacion</td></tr>';
@@ -3349,6 +3411,14 @@ function renderPreviewCodigosLote() {
 function abrirPreviewCodigosFaltantes(faltantes, opciones) {
   const items = construirPreviewCodigosFaltantes(faltantes);
   codigosLotePreview = { ...opciones, items };
+  if ($('cod-preview-lote-msg')) $('cod-preview-lote-msg').innerHTML = '';
+  renderPreviewCodigosLote();
+  openModal('modal-codigos-preview');
+}
+
+function abrirPreviewEtiquetasExistentes(lista, opciones) {
+  const items = construirPreviewEtiquetasExistentes(lista);
+  codigosLotePreview = { ...opciones, tipo: 'imprimir', items };
   if ($('cod-preview-lote-msg')) $('cod-preview-lote-msg').innerHTML = '';
   renderPreviewCodigosLote();
   openModal('modal-codigos-preview');
@@ -3796,6 +3866,40 @@ window.generarTodosCodigosFaltantes = async function() {
   });
 };
 
+window.previsualizarImpresionCodigosExistentes = async function() {
+  const categoriaKey = categoriaCodigoSeleccionada();
+  const categoriaNombre = categoriaCodigoNombre(categoriaKey);
+  const alcance = categoriaKey ? ` en ${categoriaNombre}` : '';
+  const mostrarNombre = mostrarNombreLoteCodigoSeleccionado();
+
+  showMsg('cod-msg', 'Preparando etiquetas existentes...', 'ok');
+  try {
+    productos = await getProductos(true);
+    actualizarCategoriasCodigo(categoriaKey);
+  } catch (e) {
+    console.warn('No se pudo cargar inventario para imprimir:', e.message || e);
+    showMsg('cod-msg', 'No se pudo cargar el inventario para imprimir.', 'error');
+    return;
+  }
+
+  const imprimibles = productos
+    .filter(p => codigoProductoActual(p) && productoPasaCategoriaCodigo(p, categoriaKey))
+    .sort((a, b) => String(a.nombre || '').localeCompare(String(b.nombre || '')));
+
+  if (imprimibles.length === 0) {
+    showMsg('cod-msg', `No hay productos con codigo de barras${alcance}.`, 'warn');
+    return;
+  }
+
+  abrirPreviewEtiquetasExistentes(imprimibles, {
+    mostrarNombre,
+    categoriaKey,
+    categoriaNombre,
+    alcance,
+    totalFaltantes: imprimibles.length
+  });
+};
+
 window.confirmarPreviewCodigosLote = async function() {
   if (!codigosLotePreview?.items) {
     showMsg('cod-preview-lote-msg', 'No hay una previsualizacion activa.', 'error');
@@ -3813,9 +3917,21 @@ window.confirmarPreviewCodigosLote = async function() {
 
   const btn = $('cod-preview-lote-confirmar');
   if (btn) btn.disabled = true;
-  showMsg('cod-preview-lote-msg', 'Guardando codigos y etiquetas en Firebase...', 'ok');
+  const esImpresion = codigosLotePreview.tipo === 'imprimir';
+  showMsg('cod-preview-lote-msg', esImpresion
+    ? 'Preparando impresion...'
+    : 'Guardando codigos y etiquetas en Firebase...', 'ok');
 
   try {
+    if (esImpresion) {
+      const etiquetas = expandirEtiquetasPreview(items, codigosLotePreview.mostrarNombre);
+      closeModal('modal-codigos-preview');
+      imprimirListaEtiquetasCodigo(etiquetas);
+      showMsg('cod-msg', `Imprimiendo ${etiquetas.length} etiqueta(s).`, 'ok');
+      codigosLotePreview = null;
+      return;
+    }
+
     const r = await procesarLoteCodigosFaltantes(items, { mostrarNombre: codigosLotePreview.mostrarNombre });
     const alcance = codigosLotePreview.alcance || '';
     const modoNombre = textoModoNombreEtiqueta(codigosLotePreview.mostrarNombre);
@@ -3969,6 +4085,20 @@ window.limpiarEtiquetasCodigo = async function() {
   const sheet = $('cod-print-sheet');
   if (sheet) sheet.innerHTML = '';
 };
+
+function imprimirListaEtiquetasCodigo(lista) {
+  if (!lista || lista.length === 0) {
+    showMsg('cod-msg', 'No hay etiquetas para imprimir.', 'error');
+    return;
+  }
+
+  const sheet = $('cod-print-sheet');
+  sheet.innerHTML = lista.map((item, i) => etiquetaCodigoHtml(item, i, 'print')).join('');
+  lista.forEach((item, i) => renderSvgCodigo(`cod-print-svg-${i}`, item.codigo, { width: 1.35, height: 50, margin: 0 }));
+
+  document.body.classList.add('print-barcodes');
+  setTimeout(() => window.print(), 120);
+}
 
 window.imprimirEtiquetasCodigo = function() {
   if (etiquetasCodigo.length === 0) {
