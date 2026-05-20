@@ -237,9 +237,12 @@ let calMes  = new Date().getMonth() + 1;
 const INV_PAGE_SIZE = 50;
 const COD_BATCH_SIZE = 50;
 const COD_SEQ_DIGITS = 5;
+const INV_SCAN_CLEAR_MS = 5000;
 let invPagina = 0;
 let invFiltro = '';
 let invCodigoFiltro = 'todos';
+let invUltimoCodigoEscaneado = '';
+let invUltimoCodigoEscaneadoEn = 0;
 let auditoriaIgnorados = new Map();
 let auditoriaIgnoradosCargados = false;
 let auditoriaIssuesActuales = new Map();
@@ -758,9 +761,68 @@ window.invIrPagina = function(pag) {
   renderInventarioPaginado();
 };
 
-window.filtrarInventario = function() {
-  invFiltro = $('inv-search').value.toLowerCase().trim();
+function resetEscaneoInventario() {
+  invUltimoCodigoEscaneado = '';
+  invUltimoCodigoEscaneadoEn = 0;
+}
+
+function codigoInventarioEscaneadoDosVeces(codigo, ahora = Date.now()) {
+  return !!codigo &&
+    invUltimoCodigoEscaneado === codigo &&
+    ahora - invUltimoCodigoEscaneadoEn <= INV_SCAN_CLEAR_MS;
+}
+
+function aplicarCodigoEscaneadoInventario(codigo, motor = 'lector') {
+  const limpio = limpiarCodigo(codigo);
+  const input = $('inv-search');
+  if (!input || !limpio) return;
+
+  const ahora = Date.now();
+  if (input.value.trim() === limpio && codigoInventarioEscaneadoDosVeces(limpio, ahora)) {
+    input.value = '';
+    resetEscaneoInventario();
+    filtrarInventario();
+    showMsg('inv-msg', `Busqueda limpiada: ${limpio} escaneado dos veces.`, 'ok');
+    return;
+  }
+
+  input.value = limpio;
+  filtrarInventario();
+  invUltimoCodigoEscaneado = limpio;
+  invUltimoCodigoEscaneadoEn = ahora;
+  showMsg('inv-msg', `Codigo escaneado: ${limpio} (${motor})`, 'ok');
+}
+
+window.filtrarInventario = function(desdeBusqueda = false) {
+  const input = $('inv-search');
+  const valor = input?.value || '';
+  const limpio = limpiarCodigo(valor);
+  const esDobleCodigoPegado = !!(invUltimoCodigoEscaneado &&
+    limpio === invUltimoCodigoEscaneado + invUltimoCodigoEscaneado &&
+    Date.now() - invUltimoCodigoEscaneadoEn <= INV_SCAN_CLEAR_MS);
+  if (desdeBusqueda && (esDobleCodigoPegado || (limpio && codigoInventarioEscaneadoDosVeces(limpio)))) {
+    const normalizado = valor.trim();
+    if (esDobleCodigoPegado || normalizado === limpio) {
+      const codigoLimpiado = esDobleCodigoPegado ? invUltimoCodigoEscaneado : limpio;
+      input.value = '';
+      resetEscaneoInventario();
+      invFiltro = '';
+      invCodigoFiltro = $('inv-codigo-filtro')?.value || 'todos';
+      invPagina = 0;
+      renderInventarioPaginado();
+      showMsg('inv-msg', `Busqueda limpiada: ${codigoLimpiado} escaneado dos veces.`, 'ok');
+      return;
+    }
+  }
+  invFiltro = valor.toLowerCase().trim();
   invCodigoFiltro = $('inv-codigo-filtro')?.value || 'todos';
+  const productoExacto = limpio && productos.find(p => limpiarCodigo(p.codigo_barras || '') === limpio);
+  if (productoExacto) {
+    invUltimoCodigoEscaneado = limpio;
+    invUltimoCodigoEscaneadoEn = Date.now();
+  } else if (!limpio || limpiarCodigo(invFiltro) !== invUltimoCodigoEscaneado) {
+    resetEscaneoInventario();
+  }
   invPagina = 0;
   renderInventarioPaginado();
 };
@@ -1224,10 +1286,7 @@ function completarEscaneoBarras(codigo, motor = 'lector') {
   const limpio = limpiarCodigo(codigo);
   if (!scannerActive || !limpio) return;
   if (scannerDestino === 'inventario') {
-    const input = $('inv-search');
-    input.value = limpio;
-    filtrarInventario();
-    showMsg('inv-msg', `Codigo escaneado: ${limpio} (${motor})`, 'ok');
+    aplicarCodigoEscaneadoInventario(limpio, motor);
   } else if (scannerDestino === 'venta') {
     const input = $('venta-buscar');
     input.value = limpio;

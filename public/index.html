@@ -258,7 +258,7 @@
     </div>
     <div id="inv-msg"></div>
     <div class="search-bar inv-search-row">
-      <input type="text" id="inv-search" placeholder="Buscar producto…" oninput="filtrarInventario()"/>
+      <input type="text" id="inv-search" placeholder="Buscar producto…" oninput="filtrarInventario(true)"/>
       <button type="button" class="btn-secondary scan-btn mobile-scan-btn" onclick="abrirEscanerInventario()">Escanear</button>
       <select id="inv-codigo-filtro" onchange="filtrarInventario()">
         <option value="todos">Todos</option>
