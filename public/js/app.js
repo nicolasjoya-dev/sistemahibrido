@@ -3373,6 +3373,28 @@ function expandirEtiquetasPreview(items, mostrarNombre) {
   return etiquetas;
 }
 
+async function guardarEtiquetasExistentesPreview(items, mostrarNombre) {
+  const etiquetas = expandirEtiquetasPreview(items, mostrarNombre);
+  const operaciones = [];
+  const nuevas = [];
+
+  etiquetas.forEach(etiqueta => {
+    const ref = doc(etiquetasCodigoRef());
+    operaciones.push({
+      tipo: 'set',
+      ref,
+      data: { ...etiqueta, creado: serverTimestamp() }
+    });
+    nuevas.push({ id: ref.id, ...etiqueta });
+  });
+
+  await commitOperacionesCodigo(operaciones);
+  etiquetasCodigo.push(...nuevas);
+  etiquetasCodigoCargadas = true;
+  renderEtiquetasCodigo();
+  return { productos: items.length, totalEtiquetas: nuevas.length };
+}
+
 function renderPreviewCodigosLote() {
   const tbody = $('cod-preview-lote-body');
   const resumen = $('cod-preview-lote-resumen');
@@ -3381,12 +3403,12 @@ function renderPreviewCodigosLote() {
   const items = codigosLotePreview.items || [];
   const modoNombre = textoModoNombreEtiqueta(codigosLotePreview.mostrarNombre);
   const alcance = codigosLotePreview.alcance || '';
-  const esImpresion = codigosLotePreview.tipo === 'imprimir';
+  const esExistente = codigosLotePreview.tipo === 'existentes';
   const titulo = $('cod-preview-lote-titulo');
   const btn = $('cod-preview-lote-confirmar');
-  if (titulo) titulo.textContent = esImpresion ? 'Imprimir etiquetas existentes' : 'Previsualizar codigos';
-  if (btn) btn.textContent = esImpresion ? 'Imprimir etiquetas' : 'Confirmar generacion';
-  resumen.textContent = esImpresion
+  if (titulo) titulo.textContent = esExistente ? 'Generar etiquetas existentes' : 'Previsualizar codigos';
+  if (btn) btn.textContent = esExistente ? 'Guardar etiquetas' : 'Confirmar generacion';
+  resumen.textContent = esExistente
     ? `${items.length} producto(s) con codigo${alcance}. Etiquetas ${modoNombre}. Total etiquetas: ${totalEtiquetasPreview()}.`
     : `${items.length} producto(s)${alcance}. Etiquetas ${modoNombre}. Total etiquetas: ${totalEtiquetasPreview()}.`;
 
@@ -3418,7 +3440,7 @@ function abrirPreviewCodigosFaltantes(faltantes, opciones) {
 
 function abrirPreviewEtiquetasExistentes(lista, opciones) {
   const items = construirPreviewEtiquetasExistentes(lista);
-  codigosLotePreview = { ...opciones, tipo: 'imprimir', items };
+  codigosLotePreview = { ...opciones, tipo: 'existentes', items };
   if ($('cod-preview-lote-msg')) $('cod-preview-lote-msg').innerHTML = '';
   renderPreviewCodigosLote();
   openModal('modal-codigos-preview');
@@ -3866,7 +3888,7 @@ window.generarTodosCodigosFaltantes = async function() {
   });
 };
 
-window.previsualizarImpresionCodigosExistentes = async function() {
+window.previsualizarEtiquetasCodigosExistentes = async function() {
   const categoriaKey = categoriaCodigoSeleccionada();
   const categoriaNombre = categoriaCodigoNombre(categoriaKey);
   const alcance = categoriaKey ? ` en ${categoriaNombre}` : '';
@@ -3900,6 +3922,8 @@ window.previsualizarImpresionCodigosExistentes = async function() {
   });
 };
 
+window.previsualizarImpresionCodigosExistentes = window.previsualizarEtiquetasCodigosExistentes;
+
 window.confirmarPreviewCodigosLote = async function() {
   if (!codigosLotePreview?.items) {
     showMsg('cod-preview-lote-msg', 'No hay una previsualizacion activa.', 'error');
@@ -3917,17 +3941,17 @@ window.confirmarPreviewCodigosLote = async function() {
 
   const btn = $('cod-preview-lote-confirmar');
   if (btn) btn.disabled = true;
-  const esImpresion = codigosLotePreview.tipo === 'imprimir';
-  showMsg('cod-preview-lote-msg', esImpresion
-    ? 'Preparando impresion...'
+  const esExistente = codigosLotePreview.tipo === 'existentes';
+  showMsg('cod-preview-lote-msg', esExistente
+    ? 'Guardando etiquetas existentes en Firebase...'
     : 'Guardando codigos y etiquetas en Firebase...', 'ok');
 
   try {
-    if (esImpresion) {
-      const etiquetas = expandirEtiquetasPreview(items, codigosLotePreview.mostrarNombre);
+    if (esExistente) {
+      const r = await guardarEtiquetasExistentesPreview(items, codigosLotePreview.mostrarNombre);
+      const alcance = codigosLotePreview.alcance || '';
       closeModal('modal-codigos-preview');
-      imprimirListaEtiquetasCodigo(etiquetas);
-      showMsg('cod-msg', `Imprimiendo ${etiquetas.length} etiqueta(s).`, 'ok');
+      showMsg('cod-msg', `Listo: ${r.totalEtiquetas} etiqueta(s) existente(s) generada(s)${alcance}.`, 'ok');
       codigosLotePreview = null;
       return;
     }
