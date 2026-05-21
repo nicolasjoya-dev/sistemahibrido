@@ -1,0 +1,8 @@
+{
+  "appId": "com.sistemahibrido.app",
+  "appName": "SistemaHibrido",
+  "webDir": "public",
+  "server": {
+    "androidScheme": "https"
+  }
+}
