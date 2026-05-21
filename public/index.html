@@ -15,7 +15,16 @@
 <script type="module">
   import { initializeApp }   from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
   import { getAnalytics }    from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-analytics.js';
-  import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged }
+  import {
+    getAuth,
+    GoogleAuthProvider,
+    indexedDBLocalPersistence,
+    initializeAuth,
+    onAuthStateChanged,
+    signInWithCredential,
+    signInWithPopup,
+    signOut
+  }
     from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
   import { getFirestore }    from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
 
@@ -36,10 +45,46 @@
 
   const firebaseApp = initializeApp(firebaseConfig);
   const analytics   = getAnalytics(firebaseApp);
-  const auth        = getAuth(firebaseApp);
+  const isNativeApp = () => {
+    const capacitor = window.Capacitor;
+    if (!capacitor) return false;
+    if (typeof capacitor.isNativePlatform === 'function') return capacitor.isNativePlatform();
+    return typeof capacitor.getPlatform === 'function' && capacitor.getPlatform() !== 'web';
+  };
+  const auth        = isNativeApp()
+    ? initializeAuth(firebaseApp, { persistence: indexedDBLocalPersistence })
+    : getAuth(firebaseApp);
   const db          = getFirestore(firebaseApp);
   const provider    = new GoogleAuthProvider();
   provider.setCustomParameters({ prompt: 'select_account' });
+
+  const getNativeAuth = () => window.Capacitor?.Plugins?.FirebaseAuthentication;
+
+  const signInWithNativeGoogle = async () => {
+    const nativeAuth = getNativeAuth();
+    if (!nativeAuth?.signInWithGoogle) {
+      throw new Error('FirebaseAuthentication plugin no disponible');
+    }
+
+    const nativeResult = await nativeAuth.signInWithGoogle();
+    const idToken = nativeResult?.credential?.idToken;
+    const accessToken = nativeResult?.credential?.accessToken;
+
+    if (!idToken && !accessToken) {
+      throw new Error('Google no devolvio token de acceso');
+    }
+
+    const credential = GoogleAuthProvider.credential(idToken, accessToken);
+    return signInWithCredential(auth, credential);
+  };
+
+  const cerrarSesionCompleta = async () => {
+    const nativeAuth = getNativeAuth();
+    if (isNativeApp() && nativeAuth?.signOut) {
+      await nativeAuth.signOut().catch(() => {});
+    }
+    return signOut(auth);
+  };
 
   // Exponer globalmente para que app.js los use
   window.__db   = db;
@@ -51,23 +96,27 @@
     btn.textContent = 'Conectando…';
     btn.disabled = true;
     try {
-      const result = await signInWithPopup(auth, provider);
-      const email  = result.user.email;
+      const result = isNativeApp()
+        ? await signInWithNativeGoogle()
+        : await signInWithPopup(auth, provider);
+      const email  = result.user?.email || auth.currentUser?.email;
       if (!EMAILS_AUTORIZADOS.includes(email)) {
-        await signOut(auth);
+        await cerrarSesionCompleta();
         document.getElementById('login-error').textContent =
           `⚠ ${email} no está autorizado para acceder a este sistema.`;
         btn.textContent = 'Iniciar sesión con Google';
         btn.disabled = false;
       }
     } catch (e) {
+      await cerrarSesionCompleta().catch(() => {});
+      console.error('Error login Google:', e);
       document.getElementById('login-error').textContent = 'Error al iniciar sesión. Intenta de nuevo.';
       btn.textContent = 'Iniciar sesión con Google';
       btn.disabled = false;
     }
   };
 
-  window.cerrarSesion = () => signOut(auth);
+  window.cerrarSesion = () => cerrarSesionCompleta();
 
   onAuthStateChanged(auth, (user) => {
     const loginScreen = document.getElementById('login-screen');

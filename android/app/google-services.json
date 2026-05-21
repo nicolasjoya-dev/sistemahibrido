@@ -1,0 +1,47 @@
+{
+  "project_info": {
+    "project_number": "308590731643",
+    "project_id": "hibrido-d3221",
+    "storage_bucket": "hibrido-d3221.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:308590731643:android:2dd4be65e8236a1ad65dde",
+        "android_client_info": {
+          "package_name": "com.sistemahibrido.app"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "308590731643-7btnmmi1cead5e6vp16jpqsshimtrimq.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.sistemahibrido.app",
+            "certificate_hash": "65fc9cdb55d11bcd542cb30b6433759a2a08c389"
+          }
+        },
+        {
+          "client_id": "308590731643-1ahvm81hb7lsv5oaioa6k0b82rqjrb47.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyASOvPwDUkVN2P1ZsS84QG9ypo8VXCzsY8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "308590731643-1ahvm81hb7lsv5oaioa6k0b82rqjrb47.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

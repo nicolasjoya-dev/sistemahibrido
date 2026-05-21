@@ -10,6 +10,7 @@
     "android:debug": "cd android && gradlew.bat assembleDebug"
   },
   "dependencies": {
+    "@capacitor-firebase/authentication": "^8.2.0",
     "@capacitor/android": "^8.3.4",
     "@capacitor/cli": "^8.3.4",
     "@capacitor/core": "^8.3.4",
