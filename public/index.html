@@ -675,7 +675,8 @@
       <label>Códigos alternativos</label>
       <div class="alt-code-tools">
         <input type="text" id="p-alt-barras-input" placeholder="Otro código para el mismo producto" onkeydown="if(event.key==='Enter'){event.preventDefault();agregarCodigoAlternativoProducto();}"/>
-        <button type="button" class="btn-secondary" onclick="agregarCodigoAlternativoProducto()">Agregar</button>
+        <button type="button" class="btn-secondary alt-add-btn" onclick="agregarCodigoAlternativoProducto()">Agregar</button>
+        <button type="button" class="btn-secondary scan-btn mobile-scan-btn alt-scan-btn" onclick="abrirEscanerAlternativoProducto()">Escanear</button>
       </div>
       <div id="p-alt-barras-list" class="alt-code-list"></div>
     </div>

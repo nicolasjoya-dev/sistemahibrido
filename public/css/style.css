@@ -434,7 +434,7 @@ input:focus, select:focus {
 }
 .alt-code-tools {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   gap: 8px;
   align-items: center;
 }
@@ -1195,7 +1195,14 @@ input:focus, select:focus {
     min-height: 46px;
   }
   .alt-code-tools {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+  .alt-code-tools input {
+    grid-column: 1 / -1;
+  }
+  .alt-code-tools button {
+    width: 100%;
+    justify-content: center;
   }
   .alt-code-chip {
     width: 100%;

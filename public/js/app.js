@@ -1283,24 +1283,35 @@ function renderCodigosAlternativosProducto() {
 
 window.agregarCodigoAlternativoProducto = function() {
   const input = $('p-alt-barras-input');
-  const codigo = limpiarCodigo(input?.value || '');
+  const agregado = agregarCodigoAlternativoDesdeValor(input?.value || '', 'manual');
+  if (agregado && input) input.value = '';
+};
+
+function agregarCodigoAlternativoDesdeValor(valor, origen = 'manual') {
+  const codigo = limpiarCodigo(valor || '');
   const principal = limpiarCodigo($('p-barras')?.value || '');
   if (!codigo) {
     showMsg('modal-msg', 'Escribe un código alternativo válido.', 'warn');
-    return;
+    return false;
   }
   if (principal && codigo === principal) {
     showMsg('modal-msg', 'Ese código ya está como código principal.', 'warn');
-    return;
+    return false;
   }
   if (codigosAlternativosProductoModal.includes(codigo)) {
     showMsg('modal-msg', 'Ese código alternativo ya está agregado.', 'warn');
-    return;
+    return false;
+  }
+  const repetido = productoConCodigo(codigo, editandoProductoId);
+  if (repetido) {
+    showMsg('modal-msg', `Ese código ya está asignado a: ${escapeHtml(repetido.nombre || 'otro producto')}.`, 'error');
+    return false;
   }
   codigosAlternativosProductoModal.push(codigo);
-  if (input) input.value = '';
   renderCodigosAlternativosProducto();
-};
+  if (origen === 'scanner') showMsg('modal-msg', `Código alternativo agregado: ${codigo}`, 'ok');
+  return true;
+}
 
 window.quitarCodigoAlternativoProducto = function(codigo) {
   const limpio = limpiarCodigo(codigo);
@@ -1508,6 +1519,10 @@ function completarEscaneoBarras(codigo, motor = 'lector') {
       window.buscarProductoVenta();
       showMsg('venta-msg', `Codigo escaneado: ${limpio}. No hay producto exacto.`, 'warn');
     }
+  } else if (scannerDestino === 'producto_alt') {
+    const input = $('p-alt-barras-input');
+    if (input) input.value = limpio;
+    agregarCodigoAlternativoDesdeValor(limpio, 'scanner');
   } else {
     $('p-barras').value = limpio;
     showMsg('modal-msg', `Codigo escaneado: ${limpio} (${motor})`, 'ok');
@@ -1816,6 +1831,10 @@ window.abrirEscanerInventario = function() {
 
 window.abrirEscanerVenta = function() {
   window.abrirEscanerBarras('venta');
+};
+
+window.abrirEscanerAlternativoProducto = function() {
+  window.abrirEscanerBarras('producto_alt');
 };
 
 window.eliminarProducto = async function(id) {
