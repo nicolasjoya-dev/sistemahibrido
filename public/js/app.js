@@ -240,6 +240,7 @@ const INV_PAGE_SIZE = 50;
 const COD_BATCH_SIZE = 50;
 const COD_SEQ_DIGITS = 5;
 const INV_SCAN_CLEAR_MS = 5000;
+const INV_SCAN_ENTER_GRACE_MS = 600;
 let invPagina = 0;
 let invFiltro = '';
 let invCodigoFiltro = 'todos';
@@ -774,7 +775,8 @@ document.addEventListener('keydown', e => {
   const input = e.target;
   const limpio = limpiarCodigo(input.value || '');
   const ahora = Date.now();
-  if (limpio && codigoInventarioEscaneadoDosVeces(limpio, ahora)) {
+  const pasoEnterFinalPrimerEscaneo = ahora - invUltimoCodigoEscaneadoEn <= INV_SCAN_ENTER_GRACE_MS;
+  if (limpio && !pasoEnterFinalPrimerEscaneo && codigoInventarioEscaneadoDosVeces(limpio, ahora)) {
     e.preventDefault();
     input.value = '';
     resetEscaneoInventario();
@@ -787,10 +789,11 @@ function productosInventarioFiltrados() {
   return productos.filter(p => {
     const codigos = codigosProducto(p);
     const tieneCodigo = codigos.length > 0;
+    const codigoBuscado = limpiarCodigo(invFiltro);
     const coincideTexto = !invFiltro ||
-      p.nombre.toLowerCase().includes(invFiltro) ||
+      (p.nombre || '').toLowerCase().includes(invFiltro) ||
       (p.categoria || '').toLowerCase().includes(invFiltro) ||
-      codigos.some(codigo => codigo.toLowerCase().includes(invFiltro));
+      (codigoBuscado && codigos.some(codigo => codigo.includes(codigoBuscado)));
     const coincideCategoria = !invCategoriaFiltro ||
       categoriaKeyInventario(p.categoria) === invCategoriaFiltro;
     const coincideCodigo =
@@ -1904,7 +1907,7 @@ window.buscarProductoVenta = async function() {
   const qCode = limpiarCodigo(q);
   const prods = productos
     .filter(p =>
-      p.nombre.toLowerCase().includes(qLow) ||
+      (p.nombre || '').toLowerCase().includes(qLow) ||
       (qCode && codigosProducto(p).some(codigo => codigo.includes(qCode)))
     )
     .slice(0, 6)
@@ -3694,7 +3697,7 @@ window.filtrarProductosCodigo = function() {
 
   const encontrados = productos
     .filter(p =>
-      p.nombre.toLowerCase().includes(q) ||
+      (p.nombre || '').toLowerCase().includes(q) ||
       (p.categoria || '').toLowerCase().includes(q) ||
       (qCode && codigosProducto(p).some(codigo => codigo.includes(qCode))))
     .slice(0, 8);
