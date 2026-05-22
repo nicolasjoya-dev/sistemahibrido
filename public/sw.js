@@ -1,4 +1,4 @@
-const CACHE_NAME = 'sistemahibrido-v6';
+const CACHE_NAME = 'sistemahibrido-v7';
 const STATIC_ASSETS = [
   '/',
   '/index.html',

@@ -285,11 +285,9 @@ body {
   border: 1px dashed var(--border);
   border-radius: 8px;
 }
-.secure-edit-modal,
 .audit-confirm-modal {
   max-width: 430px;
 }
-.secure-edit-copy,
 .audit-confirm-copy {
   margin: -8px 0 18px;
   color: var(--muted);

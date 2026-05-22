@@ -51,7 +51,6 @@ const VENTAS_CACHE_TTL_MS = 5 * 60 * 1000; // evita re-leer al navegar entre tab
 const DASH_VENTAS_LIMIT = 20;
 const AUDITORIA_PRECIO_COMPRA_ALTO = 50000;
 const AUDITORIA_VALOR_COMPRA_ALTO = 1000000;
-const INVENTARIO_EDIT_PASSWORD = '780828Zyc';
 const _ventasFechaCache = new Map();
 const _ventasRangoCache = new Map();
 const _ventasRecientesCache = new Map();
@@ -333,7 +332,6 @@ let auditoriaIgnoradosCargados = false;
 let auditoriaIssuesActuales = new Map();
 let auditoriaSeleccionados = new Set();
 let auditoriaAccionPendiente = null;
-let inventarioAccionPendiente = null;
 let codigosLotePreview = null;
 
 // ── Connection status ─────────────────────────────────
@@ -1432,48 +1430,6 @@ window.toggleProductoCaja = function() {
   setProductoCajaVisible();
 };
 
-function solicitarClaveEdicionInventario(id, accion = 'producto') {
-  inventarioAccionPendiente = { id: id || null, accion };
-  const input = $('inv-pass-input');
-  const msg = $('inv-pass-msg');
-  const copy = document.querySelector('.secure-edit-copy');
-  if (input) input.value = '';
-  if (msg) msg.innerHTML = '';
-  if (copy) {
-    copy.textContent = accion === 'eliminar'
-      ? 'Ingresa la contrasena para eliminar este producto.'
-      : 'Ingresa la contrasena para editar este producto.';
-  }
-  openModal('modal-inv-pass');
-  setTimeout(() => input?.focus(), 80);
-}
-
-window.cancelarClaveInventario = function() {
-  inventarioAccionPendiente = null;
-  closeModal('modal-inv-pass');
-};
-
-window.confirmarClaveInventario = function() {
-  const input = $('inv-pass-input');
-  const valor = input?.value || '';
-  if (valor !== INVENTARIO_EDIT_PASSWORD) {
-    showMsg('inv-pass-msg', 'Contrasena incorrecta.', 'error');
-    input?.focus();
-    return;
-  }
-  const pendiente = inventarioAccionPendiente;
-  inventarioAccionPendiente = null;
-  closeModal('modal-inv-pass');
-  if (!pendiente) return;
-  if (pendiente.accion === 'entrada') {
-    abrirModalEntradaFormulario(pendiente.id);
-  } else if (pendiente.accion === 'eliminar') {
-    eliminarProductoConfirmado(pendiente.id);
-  } else {
-    abrirModalProductoFormulario(pendiente.id);
-  }
-};
-
 function abrirModalProductoFormulario(id) {
   editandoProductoId = id || null;
   $('modal-titulo').textContent   = id ? 'Editar Producto' : 'Nuevo Producto';
@@ -1518,11 +1474,7 @@ function abrirModalProductoFormulario(id) {
 }
 
 window.openModalProducto = function(id) {
-  if (id) {
-    solicitarClaveEdicionInventario(id, 'producto');
-    return;
-  }
-  abrirModalProductoFormulario(null);
+  abrirModalProductoFormulario(id || null);
 };
 
 window.calcMargen = function() {
@@ -2225,7 +2177,7 @@ async function eliminarProductoConfirmado(id) {
 }
 
 window.eliminarProducto = function(id) {
-  solicitarClaveEdicionInventario(id, 'eliminar');
+  eliminarProductoConfirmado(id);
 };
 
 /* ═══════════════════════════════════════════════════════

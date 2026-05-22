@@ -772,25 +772,6 @@
   </div>
 </div>
 
-<div class="modal-overlay" id="modal-inv-pass">
-  <div class="modal secure-edit-modal">
-    <div class="modal-header">
-      <h2>Confirmar edicion</h2>
-      <button class="modal-close" onclick="cancelarClaveInventario()">✕</button>
-    </div>
-    <p class="secure-edit-copy">Ingresa la contrasena para modificar el inventario.</p>
-    <div id="inv-pass-msg"></div>
-    <div class="form-group">
-      <label>Contrasena</label>
-      <input type="password" id="inv-pass-input" autocomplete="off" onkeydown="if(event.key==='Enter'){event.preventDefault();confirmarClaveInventario();}"/>
-    </div>
-    <div class="modal-actions">
-      <button class="btn-secondary" onclick="cancelarClaveInventario()">Cancelar</button>
-      <button class="btn-primary" onclick="confirmarClaveInventario()">Continuar</button>
-    </div>
-  </div>
-</div>
-
 <div class="modal-overlay" id="modal-auditoria-accion">
   <div class="modal audit-confirm-modal">
     <div class="modal-header">
