@@ -809,6 +809,15 @@
         <span>La lectura no fue estable.</span>
       </div>
     </div>
+    <div id="scanner-confirm-panel" class="scanner-confirm-panel" hidden>
+      <span class="scanner-confirm-kicker">Codigo detectado</span>
+      <strong id="scanner-confirm-code">---</strong>
+      <p id="scanner-confirm-detail">Confirma que el numero sea correcto antes de usarlo.</p>
+      <div class="scanner-confirm-actions">
+        <button type="button" class="btn-secondary" onclick="reintentarCodigoEscaneado()">Volver a intentar</button>
+        <button type="button" class="btn-primary" onclick="confirmarCodigoEscaneado()">Usar codigo</button>
+      </div>
+    </div>
     <p class="scanner-help">Apunta la cámara al código de barras.</p>
     <div class="modal-actions">
       <button class="btn-secondary" onclick="cerrarEscanerBarras()">Cancelar</button>
