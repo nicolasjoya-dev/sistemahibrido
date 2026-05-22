@@ -311,7 +311,6 @@ let scannerFallbackTimer = null;
 let scannerDestino      = 'producto';
 let scannerLecturaPendiente = null;
 let scannerRetryTimer = null;
-let scannerCodigoConfirmacionPendiente = null;
 let codigosAlternativosProductoModal = [];
 let calAnio = new Date().getFullYear();
 let calMes  = new Date().getMonth() + 1;
@@ -1635,17 +1634,6 @@ function ocultarRetryScanner() {
   scannerRetryTimer = null;
 }
 
-function scannerModalEl() {
-  return document.querySelector('#modal-scanner .scanner-modal');
-}
-
-function ocultarConfirmacionFinalScanner() {
-  const panel = $('scanner-confirm-panel');
-  if (panel) panel.hidden = true;
-  scannerModalEl()?.classList.remove('confirming');
-  scannerCodigoConfirmacionPendiente = null;
-}
-
 function mostrarRetryScanner(text = 'La lectura no fue estable.') {
   const overlay = $('scanner-retry-overlay');
   if (overlay) {
@@ -1661,50 +1649,6 @@ function mostrarRetryScanner(text = 'La lectura no fue estable.') {
 function resetConfirmacionScanner() {
   scannerLecturaPendiente = null;
   ocultarRetryScanner();
-  ocultarConfirmacionFinalScanner();
-}
-
-function scannerRequiereConfirmacionFinal() {
-  const viewportMovil = window.matchMedia?.('(max-width: 900px)')?.matches || window.innerWidth <= 900;
-  const tactil = window.matchMedia?.('(pointer: coarse)')?.matches || (navigator.maxTouchPoints || 0) > 0;
-  return Boolean(viewportMovil && tactil);
-}
-
-function detenerLectoresParaConfirmacion() {
-  if (scannerFallbackTimer) clearTimeout(scannerFallbackTimer);
-  scannerFallbackTimer = null;
-  detenerZxingScanner();
-  detenerCamaraNativa();
-  detenerQuaggaScanner();
-  limpiarVistaScanner();
-  scannerEngine = 'confirmacion';
-  scannerActive = false;
-}
-
-function detalleConfirmacionScanner(codigo) {
-  if (scannerDestino === 'venta' || scannerDestino === 'inventario') {
-    const producto = productoConCodigo(codigo);
-    if (producto) return `Producto: ${producto.nombre}`;
-    return scannerDestino === 'venta'
-      ? 'No hay producto exacto. Si lo usas, se pondra en la busqueda.'
-      : 'No hay producto exacto. Si lo usas, se pondra en la busqueda de inventario.';
-  }
-  if (scannerDestino === 'producto_alt') return 'Se agregara como codigo alternativo del producto.';
-  return 'Se usara como codigo principal del producto.';
-}
-
-function mostrarConfirmacionFinalScanner(codigo, motor) {
-  detenerLectoresParaConfirmacion();
-  ocultarRetryScanner();
-  scannerCodigoConfirmacionPendiente = { codigo, motor, destino: scannerDestino };
-  const codeEl = $('scanner-confirm-code');
-  const detailEl = $('scanner-confirm-detail');
-  if (codeEl) codeEl.textContent = codigo;
-  if (detailEl) detailEl.textContent = detalleConfirmacionScanner(codigo);
-  const panel = $('scanner-confirm-panel');
-  if (panel) panel.hidden = false;
-  scannerModalEl()?.classList.add('confirming');
-  setScannerMsg('Revisa el numero antes de usarlo.', 'warn');
 }
 
 function lecturaScannerAceptada(codigo, motor) {
@@ -1735,9 +1679,10 @@ function lecturaScannerAceptada(codigo, motor) {
   return true;
 }
 
-function aplicarEscaneoBarrasConfirmado(codigo, motor = 'lector') {
+function completarEscaneoBarras(codigo, motor = 'lector') {
   const limpio = limpiarCodigo(codigo);
-  if (!limpio) return false;
+  if (!scannerActive || !limpio) return false;
+  if (!lecturaScannerAceptada(limpio, motor)) return false;
   if (scannerDestino === 'inventario') {
     aplicarCodigoEscaneadoInventario(limpio, motor);
   } else if (scannerDestino === 'venta') {
@@ -1767,31 +1712,6 @@ function aplicarEscaneoBarrasConfirmado(codigo, motor = 'lector') {
   window.cerrarEscanerBarras();
   return true;
 }
-
-function completarEscaneoBarras(codigo, motor = 'lector') {
-  const limpio = limpiarCodigo(codigo);
-  if (!scannerActive || !limpio) return false;
-  if (!lecturaScannerAceptada(limpio, motor)) return false;
-  if (scannerRequiereConfirmacionFinal()) {
-    mostrarConfirmacionFinalScanner(limpio, motor);
-    return true;
-  }
-  return aplicarEscaneoBarrasConfirmado(limpio, motor);
-}
-
-window.confirmarCodigoEscaneado = function() {
-  const pendiente = scannerCodigoConfirmacionPendiente;
-  if (!pendiente?.codigo) return;
-  scannerDestino = pendiente.destino || scannerDestino;
-  scannerCodigoConfirmacionPendiente = null;
-  aplicarEscaneoBarrasConfirmado(pendiente.codigo, pendiente.motor || 'lector');
-};
-
-window.reintentarCodigoEscaneado = function() {
-  const destino = scannerCodigoConfirmacionPendiente?.destino || scannerDestino;
-  resetConfirmacionScanner();
-  window.abrirEscanerBarras(destino);
-};
 
 function crearLectorScanner() {
   const zxing = window.ZXingBrowser;

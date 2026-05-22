@@ -664,43 +664,6 @@ input:focus, select:focus {
   color: #c8ccd6;
   font-size: 0.9rem;
 }
-.scanner-modal.confirming .scanner-frame {
-  display: none;
-}
-.scanner-confirm-panel {
-  margin-top: 14px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--bg3);
-  padding: 18px;
-  text-align: center;
-}
-.scanner-confirm-kicker {
-  color: var(--muted);
-  font-size: 0.76rem;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-}
-.scanner-confirm-panel strong {
-  display: block;
-  margin: 8px 0;
-  color: var(--teal);
-  font-family: var(--font-head);
-  font-size: clamp(1.5rem, 8vw, 2.35rem);
-  overflow-wrap: anywhere;
-  letter-spacing: 0;
-}
-.scanner-confirm-panel p {
-  margin: 0 auto 16px;
-  color: var(--muted);
-  line-height: 1.4;
-  max-width: 340px;
-}
-.scanner-confirm-actions {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
-}
 .scanner-help {
   margin: 12px 0 16px;
   color: var(--muted);
@@ -1494,9 +1457,6 @@ input:focus, select:focus {
   }
   .sale-choice-card {
     min-height: 118px;
-  }
-  .scanner-confirm-actions {
-    grid-template-columns: 1fr;
   }
   .cart-item-qty { width: 76px; }
   .cart-item-sub {
