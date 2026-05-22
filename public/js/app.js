@@ -1436,8 +1436,14 @@ function solicitarClaveEdicionInventario(id, accion = 'producto') {
   inventarioAccionPendiente = { id: id || null, accion };
   const input = $('inv-pass-input');
   const msg = $('inv-pass-msg');
+  const copy = document.querySelector('.secure-edit-copy');
   if (input) input.value = '';
   if (msg) msg.innerHTML = '';
+  if (copy) {
+    copy.textContent = accion === 'eliminar'
+      ? 'Ingresa la contrasena para eliminar este producto.'
+      : 'Ingresa la contrasena para editar este producto.';
+  }
   openModal('modal-inv-pass');
   setTimeout(() => input?.focus(), 80);
 }
@@ -1512,7 +1518,11 @@ function abrirModalProductoFormulario(id) {
 }
 
 window.openModalProducto = function(id) {
-  solicitarClaveEdicionInventario(id || null, 'producto');
+  if (id) {
+    solicitarClaveEdicionInventario(id, 'producto');
+    return;
+  }
+  abrirModalProductoFormulario(null);
 };
 
 window.calcMargen = function() {
@@ -2248,7 +2258,7 @@ async function abrirModalEntradaFormulario(id) {
 }
 
 window.openModalEntrada = function(id) {
-  solicitarClaveEdicionInventario(id, 'entrada');
+  abrirModalEntradaFormulario(id);
 };
 
 window.guardarEntrada = async function() {
