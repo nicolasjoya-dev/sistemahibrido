@@ -1651,12 +1651,19 @@ function resetConfirmacionScanner() {
   ocultarRetryScanner();
 }
 
+function scannerRequiereLecturaEstable() {
+  const viewportMovil = window.matchMedia?.('(max-width: 900px)')?.matches || window.innerWidth <= 900;
+  const tactil = window.matchMedia?.('(pointer: coarse)')?.matches || (navigator.maxTouchPoints || 0) > 0;
+  return Boolean(viewportMovil && tactil);
+}
+
 function lecturaScannerAceptada(codigo, motor) {
   const limpio = limpiarCodigo(codigo);
   if (!/^[A-Z0-9._-]{4,32}$/.test(limpio)) {
     mostrarRetryScanner('Codigo demasiado corto o raro.');
     return false;
   }
+  if (!scannerRequiereLecturaEstable()) return true;
 
   const ahora = Date.now();
   const previa = scannerLecturaPendiente;
