@@ -51,6 +51,7 @@ const VENTAS_CACHE_TTL_MS = 5 * 60 * 1000; // evita re-leer al navegar entre tab
 const DASH_VENTAS_LIMIT = 20;
 const AUDITORIA_PRECIO_COMPRA_ALTO = 50000;
 const AUDITORIA_VALOR_COMPRA_ALTO = 1000000;
+const INVENTARIO_EDIT_PASSWORD = '780828Zyc';
 const _ventasFechaCache = new Map();
 const _ventasRangoCache = new Map();
 const _ventasRecientesCache = new Map();
@@ -330,6 +331,9 @@ let invUltimoCodigoEscaneadoEn = 0;
 let auditoriaIgnorados = new Map();
 let auditoriaIgnoradosCargados = false;
 let auditoriaIssuesActuales = new Map();
+let auditoriaSeleccionados = new Set();
+let auditoriaAccionPendiente = null;
+let inventarioAccionPendiente = null;
 let codigosLotePreview = null;
 
 // ── Connection status ─────────────────────────────────
@@ -1183,7 +1187,9 @@ function renderAuditoriaLista(id, issues) {
   }
 
   cont.innerHTML = issues.map(issue => `
-    <div class="audit-item ${issue.severidad}">
+    <div class="audit-item ${issue.severidad} ${auditoriaSeleccionados.has(issue.id) ? 'selected' : ''}">
+      <input class="audit-select" type="checkbox" ${auditoriaSeleccionados.has(issue.id) ? 'checked' : ''}
+        onchange="toggleSeleccionAuditoria('${escapeJsString(issue.id)}', this.checked)"/>
       <div class="audit-main">
         <div class="audit-kicker">${escapeHtml(issue.etiqueta)}</div>
         <div class="audit-name">${escapeHtml(issue.nombre)}</div>
@@ -1204,6 +1210,8 @@ function renderAuditoriaLista(id, issues) {
 function renderAuditoria(resultado) {
   const todosIssues = [...resultado.duplicados, ...resultado.altos, ...resultado.pendientes];
   auditoriaIssuesActuales = new Map(todosIssues.map(issue => [issue.id, issue]));
+  const visibles = new Set(todosIssues.map(issue => issue.id));
+  auditoriaSeleccionados = new Set([...auditoriaSeleccionados].filter(id => visibles.has(id)));
 
   setTextAuditoria('aud-progreso', `${resultado.stats.pctCodigo}%`);
   setTextAuditoria('aud-progreso-detalle', `${resultado.stats.conCodigo} con codigo / ${resultado.stats.total} productos`);
@@ -1220,7 +1228,130 @@ function renderAuditoria(resultado) {
   renderAuditoriaLista('aud-duplicados-list', resultado.duplicados);
   renderAuditoriaLista('aud-altos-list', resultado.altos);
   renderAuditoriaLista('aud-pendientes-list', resultado.pendientes);
+  actualizarEstadoSeleccionAuditoria();
 }
+
+function actualizarEstadoSeleccionAuditoria() {
+  const el = $('aud-bulk-status');
+  if (!el) return;
+  const total = auditoriaIssuesActuales.size;
+  const seleccionados = auditoriaSeleccionados.size;
+  el.textContent = `${seleccionados} seleccionado(s) de ${total} aviso(s) visibles`;
+}
+
+window.toggleSeleccionAuditoria = function(issueId, checked) {
+  if (checked) auditoriaSeleccionados.add(issueId);
+  else auditoriaSeleccionados.delete(issueId);
+  actualizarEstadoSeleccionAuditoria();
+};
+
+window.seleccionarTodosAuditoria = function() {
+  auditoriaSeleccionados = new Set(auditoriaIssuesActuales.keys());
+  renderAuditoria(calcularAuditoria());
+};
+
+window.limpiarSeleccionAuditoria = function() {
+  auditoriaSeleccionados.clear();
+  renderAuditoria(calcularAuditoria());
+};
+
+window.prepararAuditoriaSeleccion = function(tipo) {
+  const ids = [...auditoriaSeleccionados].filter(id => auditoriaIssuesActuales.has(id));
+  if (ids.length === 0) {
+    showMsg('aud-msg', 'Selecciona al menos un aviso de auditoria.', 'warn');
+    return;
+  }
+  auditoriaAccionPendiente = { tipo, ids };
+  const issues = ids.map(id => auditoriaIssuesActuales.get(id)).filter(Boolean);
+  const productosUnicos = new Set(issues.map(issue => issue.productoId).filter(Boolean));
+  const titulo = tipo === 'eliminar' ? 'Eliminar productos seleccionados' : 'Marcar seleccion como correcta';
+  const texto = tipo === 'eliminar'
+    ? `Vas a eliminar ${productosUnicos.size} producto(s) del inventario relacionados con ${ids.length} aviso(s). Esta accion no se puede deshacer.`
+    : `Vas a ocultar ${ids.length} aviso(s) de auditoria como revisados. Los productos no se eliminan.`;
+  $('aud-action-title').textContent = titulo;
+  $('aud-action-text').textContent = texto;
+  $('aud-action-msg').innerHTML = '';
+  const btn = $('aud-action-confirm-btn');
+  if (btn) btn.textContent = tipo === 'eliminar' ? 'Eliminar' : 'Marcar bien';
+  openModal('modal-auditoria-accion');
+};
+
+window.cancelarAccionAuditoria = function() {
+  auditoriaAccionPendiente = null;
+  closeModal('modal-auditoria-accion');
+};
+
+async function marcarAuditoriasComoCorrectas(issues) {
+  let batch = writeBatch(db());
+  let ops = 0;
+  for (const issue of issues) {
+    batch.set(doc(db(), 'auditoria_ignorados', issue.id), {
+      tipo: issue.tipo,
+      producto_id: issue.productoId,
+      producto_nombre: issue.nombre,
+      firma: issue.firma,
+      detalle: issue.detalle,
+      actualizado: serverTimestamp()
+    }, { merge: true });
+    auditoriaIgnorados.set(issue.id, issue);
+    ops++;
+    if (ops >= 450) {
+      await batch.commit();
+      batch = writeBatch(db());
+      ops = 0;
+    }
+  }
+  if (ops > 0) await batch.commit();
+}
+
+async function eliminarProductosAuditoria(issues) {
+  const idsProductos = [...new Set(issues.map(issue => issue.productoId).filter(Boolean))];
+  let batch = writeBatch(db());
+  let ops = 0;
+  for (const productoId of idsProductos) {
+    batch.delete(doc(db(), 'productos', productoId));
+    ops++;
+    if (ops >= 450) {
+      await batch.commit();
+      batch = writeBatch(db());
+      ops = 0;
+    }
+  }
+  if (ops > 0) await batch.commit();
+  if (_productosCache) {
+    const borrados = new Set(idsProductos);
+    _productosCache = _productosCache.filter(p => !borrados.has(p.id));
+    productos = _productosCache;
+  }
+  return idsProductos.length;
+}
+
+window.confirmarAccionAuditoria = async function() {
+  const pendiente = auditoriaAccionPendiente;
+  if (!pendiente) return;
+  const btn = $('aud-action-confirm-btn');
+  if (btn) btn.disabled = true;
+  try {
+    const issues = pendiente.ids.map(id => auditoriaIssuesActuales.get(id)).filter(Boolean);
+    if (pendiente.tipo === 'eliminar') {
+      const total = await eliminarProductosAuditoria(issues);
+      showMsg('aud-msg', `${total} producto(s) eliminados del inventario.`, 'warn');
+    } else {
+      await marcarAuditoriasComoCorrectas(issues);
+      showMsg('aud-msg', `${issues.length} aviso(s) marcados como correctos.`, 'ok');
+    }
+    auditoriaSeleccionados.clear();
+    auditoriaAccionPendiente = null;
+    closeModal('modal-auditoria-accion');
+    renderAuditoria(calcularAuditoria());
+    if ($('tab-inventario')?.classList.contains('active')) renderInventarioPaginado();
+  } catch (e) {
+    console.warn('No se pudo ejecutar accion de auditoria:', e.message || e);
+    showMsg('aud-action-msg', 'No se pudo completar. Revisa la conexion e intenta de nuevo.', 'error');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+};
 
 window.loadAuditoria = async function(forzar = false) {
   showMsg('aud-msg', 'Revisando inventario...', 'ok');
@@ -1301,7 +1432,43 @@ window.toggleProductoCaja = function() {
   setProductoCajaVisible();
 };
 
-window.openModalProducto = function(id) {
+function solicitarClaveEdicionInventario(id, accion = 'producto') {
+  inventarioAccionPendiente = { id: id || null, accion };
+  const input = $('inv-pass-input');
+  const msg = $('inv-pass-msg');
+  if (input) input.value = '';
+  if (msg) msg.innerHTML = '';
+  openModal('modal-inv-pass');
+  setTimeout(() => input?.focus(), 80);
+}
+
+window.cancelarClaveInventario = function() {
+  inventarioAccionPendiente = null;
+  closeModal('modal-inv-pass');
+};
+
+window.confirmarClaveInventario = function() {
+  const input = $('inv-pass-input');
+  const valor = input?.value || '';
+  if (valor !== INVENTARIO_EDIT_PASSWORD) {
+    showMsg('inv-pass-msg', 'Contrasena incorrecta.', 'error');
+    input?.focus();
+    return;
+  }
+  const pendiente = inventarioAccionPendiente;
+  inventarioAccionPendiente = null;
+  closeModal('modal-inv-pass');
+  if (!pendiente) return;
+  if (pendiente.accion === 'entrada') {
+    abrirModalEntradaFormulario(pendiente.id);
+  } else if (pendiente.accion === 'eliminar') {
+    eliminarProductoConfirmado(pendiente.id);
+  } else {
+    abrirModalProductoFormulario(pendiente.id);
+  }
+};
+
+function abrirModalProductoFormulario(id) {
   editandoProductoId = id || null;
   $('modal-titulo').textContent   = id ? 'Editar Producto' : 'Nuevo Producto';
   $('modal-save-btn').textContent = id ? 'Actualizar' : 'Guardar';
@@ -1342,6 +1509,10 @@ window.openModalProducto = function(id) {
   productoGuardando = false;
   if ($('modal-save-btn')) $('modal-save-btn').disabled = false;
   openModal('modal-producto');
+}
+
+window.openModalProducto = function(id) {
+  solicitarClaveEdicionInventario(id || null, 'producto');
 };
 
 window.calcMargen = function() {
@@ -2030,7 +2201,7 @@ window.abrirEscanerAlternativoProducto = function() {
   window.abrirEscanerBarras('producto_alt');
 };
 
-window.eliminarProducto = async function(id) {
+async function eliminarProductoConfirmado(id) {
   if (!confirm('¿Eliminar este producto? Esta acción no se puede deshacer.')) return;
   await deleteDoc(doc(db(), 'productos', id));
   if (_productosCache) {
@@ -2041,12 +2212,16 @@ window.eliminarProducto = async function(id) {
   showMsg('inv-msg', 'Producto eliminado.', 'warn');
   renderInventarioPaginado();
   if ($('tab-auditoria')?.classList.contains('active')) loadAuditoria(true);
+}
+
+window.eliminarProducto = function(id) {
+  solicitarClaveEdicionInventario(id, 'eliminar');
 };
 
 /* ═══════════════════════════════════════════════════════
    MODAL ENTRADA DE INVENTARIO
 ═══════════════════════════════════════════════════════ */
-window.openModalEntrada = async function(id) {
+async function abrirModalEntradaFormulario(id) {
   entradaProductoId = id;
   const p = productos.find(x => x.id === id);
   $('entrada-prod-nombre').textContent = p ? `${p.nombre} — Stock actual: ${p.stock} ${p.unidad}` : '';
@@ -2070,6 +2245,10 @@ window.openModalEntrada = async function(id) {
           <td style="color:var(--muted)">${e.nota || '—'}</td>
         </tr>`).join('');
   openModal('modal-entrada');
+}
+
+window.openModalEntrada = function(id) {
+  solicitarClaveEdicionInventario(id, 'entrada');
 };
 
 window.guardarEntrada = async function() {
@@ -2665,13 +2844,17 @@ window.ejecutarCierre = async function() {
 
   const detalle    = Object.entries(desglose).map(([nombre, d]) => ({ nombre, ...d }));
   const ganancia   = detalle.reduce((s, d) => s + d.ganancia, 0);
-  const masVendido = [...detalle].sort((a, b) => b.vendido - a.vendido)[0]?.nombre || '—';
+  const masVendidoItem = [...detalle].sort((a, b) => b.vendido - a.vendido)[0] || null;
+  const masVendido = masVendidoItem?.nombre || '---';
+  const masVendidoCantidad = masVendidoItem?.vendido || 0;
   const hoy        = fechaLocal();
 
   await setDoc(doc(db(), 'cierres', hoy), {
     fecha: hoy, total_ventas: total,
     num_transacciones: transacciones,
     ganancia_total: ganancia, detalle,
+    producto_mas_vendido: masVendido,
+    producto_mas_vendido_cantidad: masVendidoCantidad,
     creado: serverTimestamp()
   });
 
@@ -2680,7 +2863,7 @@ window.ejecutarCierre = async function() {
     <div class="stat-card"><div class="stat-icon green">$</div><div class="stat-data"><span class="stat-val">${fmtCOP(total)}</span><span class="stat-label">Total ventas</span></div></div>
     <div class="stat-card"><div class="stat-icon blue">◎</div><div class="stat-data"><span class="stat-val">${transacciones}</span><span class="stat-label">Transacciones</span></div></div>
     <div class="stat-card"><div class="stat-icon teal">↑</div><div class="stat-data"><span class="stat-val">${fmtCOP(ganancia)}</span><span class="stat-label">Ganancia</span></div></div>
-    <div class="stat-card"><div class="stat-icon amber">★</div><div class="stat-data"><span class="stat-val" style="font-size:1rem">${masVendido}</span><span class="stat-label">Más vendido</span></div></div>
+    <div class="stat-card"><div class="stat-icon amber">★</div><div class="stat-data"><span class="stat-val" style="font-size:1rem">${masVendido}</span><span class="stat-label">Mas vendido (${fmt(masVendidoCantidad)})</span></div></div>
   `;
 
   const tbody = $('cierre-detalle-body');
@@ -2703,13 +2886,14 @@ async function loadCierreHistorial() {
   }
   const tbody   = $('cierre-historial-body');
   tbody.innerHTML = cierres.length === 0
-    ? '<tr><td colspan="4" class="empty">Sin cierres registrados</td></tr>'
+    ? '<tr><td colspan="5" class="empty">Sin cierres registrados</td></tr>'
     : cierres.map(c => `
         <tr>
           <td>${c.fecha}</td>
           <td style="color:var(--teal)">${fmtCOP(c.total_ventas)}</td>
           <td>${c.num_transacciones}</td>
           <td style="color:var(--green)">${fmtCOP(c.ganancia_total)}</td>
+          <td>${escapeHtml(c.producto_mas_vendido || '---')}${c.producto_mas_vendido_cantidad ? ` (${fmt(c.producto_mas_vendido_cantidad)})` : ''}</td>
         </tr>`).join('');
 }
 

@@ -170,6 +170,15 @@ body {
   gap: 10px;
   flex-wrap: wrap;
 }
+.audit-danger-btn {
+  color: var(--red) !important;
+  border-color: #f05f5f55 !important;
+}
+.audit-bulk-status {
+  margin: -8px 0 18px;
+  color: var(--muted);
+  font-size: 0.86rem;
+}
 .audit-summary-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
@@ -212,7 +221,7 @@ body {
 }
 .audit-item {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(150px, 190px) auto;
+  grid-template-columns: auto minmax(0, 1fr) minmax(150px, 190px) auto;
   align-items: center;
   gap: 14px;
   padding: 14px;
@@ -220,6 +229,15 @@ body {
   border: 1px solid var(--border);
   border-left: 4px solid var(--border2);
   border-radius: 8px;
+}
+.audit-item.selected {
+  border-color: var(--teal);
+  background: rgba(0, 201, 167, 0.08);
+}
+.audit-select {
+  width: 20px;
+  height: 20px;
+  accent-color: var(--teal);
 }
 .audit-item.danger { border-left-color: var(--red); }
 .audit-item.warning { border-left-color: var(--amber); }
@@ -266,6 +284,16 @@ body {
   margin: 0;
   border: 1px dashed var(--border);
   border-radius: 8px;
+}
+.secure-edit-modal,
+.audit-confirm-modal {
+  max-width: 430px;
+}
+.secure-edit-copy,
+.audit-confirm-copy {
+  margin: -8px 0 18px;
+  color: var(--muted);
+  line-height: 1.45;
 }
 
 /* ── Table ───────────────────────────────────────────────────── */
@@ -1419,6 +1447,9 @@ input:focus, select:focus {
     align-items: center;
     justify-content: space-between;
     gap: 10px;
+  }
+  .audit-select {
+    justify-self: start;
   }
   .audit-actions {
     justify-content: stretch;

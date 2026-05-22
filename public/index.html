@@ -40,7 +40,10 @@
 
   const EMAILS_AUTORIZADOS = [
     "miscelanealafortaleza852@gmail.com",
-    "nico.joya2010@gmail.com"
+    "nico.joya2010@gmail.com",
+    "cristianatencia217@gmail.com",
+    "lizcanonicoll19@gmail.com",
+    "shirwil60@gmail.com"
   ];
 
   const firebaseApp = initializeApp(firebaseConfig);
@@ -99,7 +102,7 @@
       const result = isNativeApp()
         ? await signInWithNativeGoogle()
         : await signInWithPopup(auth, provider);
-      const email  = result.user?.email || auth.currentUser?.email;
+      const email  = (result.user?.email || auth.currentUser?.email || '').toLowerCase();
       if (!EMAILS_AUTORIZADOS.includes(email)) {
         await cerrarSesionCompleta();
         document.getElementById('login-error').textContent =
@@ -337,10 +340,15 @@
       <div><h1>Centro de Auditoria</h1><p class="page-sub">Revision de datos del inventario</p></div>
       <div class="audit-header-actions">
         <button class="btn-secondary" onclick="loadAuditoria(true)">Actualizar</button>
+        <button class="btn-secondary" onclick="seleccionarTodosAuditoria()">Seleccionar todos</button>
+        <button class="btn-secondary" onclick="limpiarSeleccionAuditoria()">Limpiar seleccion</button>
+        <button class="btn-secondary" onclick="prepararAuditoriaSeleccion('ignorar')">Marcar bien</button>
+        <button class="btn-secondary audit-danger-btn" onclick="prepararAuditoriaSeleccion('eliminar')">Eliminar seleccion</button>
         <button class="btn-secondary" onclick="restaurarAuditoriaIgnorados()">Restaurar ocultos</button>
       </div>
     </div>
     <div id="aud-msg"></div>
+    <div id="aud-bulk-status" class="audit-bulk-status">0 seleccionados</div>
     <div class="audit-summary-grid">
       <div class="stat-card"><div class="stat-icon teal">%</div><div class="stat-data"><span class="stat-val" id="aud-progreso">---</span><span class="stat-label">Con codigo</span></div></div>
       <div class="stat-card"><div class="stat-icon amber">!</div><div class="stat-data"><span class="stat-val" id="aud-duplicados-stat">---</span><span class="stat-label">Codigos duplicados</span></div></div>
@@ -621,7 +629,7 @@
     <div class="panel" style="margin-top:24px">
       <div class="panel-title">Historial de Cierres</div>
       <table class="data-table">
-        <thead><tr><th>Fecha</th><th>Ventas</th><th>Transacciones</th><th>Ganancia</th></tr></thead>
+        <thead><tr><th>Fecha</th><th>Ventas</th><th>Transacciones</th><th>Ganancia</th><th>Mas vendido</th></tr></thead>
         <tbody id="cierre-historial-body"></tbody>
       </table>
     </div>
@@ -760,6 +768,40 @@
     <div class="modal-actions">
       <button class="btn-secondary" onclick="closeModal('modal-producto')">Cancelar</button>
       <button class="btn-primary" id="modal-save-btn" onclick="guardarProducto()">Guardar</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="modal-inv-pass">
+  <div class="modal secure-edit-modal">
+    <div class="modal-header">
+      <h2>Confirmar edicion</h2>
+      <button class="modal-close" onclick="cancelarClaveInventario()">✕</button>
+    </div>
+    <p class="secure-edit-copy">Ingresa la contrasena para modificar el inventario.</p>
+    <div id="inv-pass-msg"></div>
+    <div class="form-group">
+      <label>Contrasena</label>
+      <input type="password" id="inv-pass-input" autocomplete="off" onkeydown="if(event.key==='Enter'){event.preventDefault();confirmarClaveInventario();}"/>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-secondary" onclick="cancelarClaveInventario()">Cancelar</button>
+      <button class="btn-primary" onclick="confirmarClaveInventario()">Continuar</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="modal-auditoria-accion">
+  <div class="modal audit-confirm-modal">
+    <div class="modal-header">
+      <h2 id="aud-action-title">Confirmar accion</h2>
+      <button class="modal-close" onclick="cancelarAccionAuditoria()">✕</button>
+    </div>
+    <p id="aud-action-text" class="audit-confirm-copy"></p>
+    <div id="aud-action-msg"></div>
+    <div class="modal-actions">
+      <button class="btn-secondary" onclick="cancelarAccionAuditoria()">Cancelar</button>
+      <button class="btn-primary" id="aud-action-confirm-btn" onclick="confirmarAccionAuditoria()">Confirmar</button>
     </div>
   </div>
 </div>
