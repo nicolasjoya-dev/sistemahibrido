@@ -44,7 +44,8 @@
     "cristianatencia217@gmail.com",
     "lizcanonicoll19@gmail.com",
     "shirwil60@gmail.com"
-  ];
+  ].map(email => email.toLowerCase());
+  const emailAutorizado = email => EMAILS_AUTORIZADOS.includes(String(email || '').toLowerCase());
 
   const firebaseApp = initializeApp(firebaseConfig);
   const analytics   = getAnalytics(firebaseApp);
@@ -103,7 +104,7 @@
         ? await signInWithNativeGoogle()
         : await signInWithPopup(auth, provider);
       const email  = (result.user?.email || auth.currentUser?.email || '').toLowerCase();
-      if (!EMAILS_AUTORIZADOS.includes(email)) {
+      if (!emailAutorizado(email)) {
         await cerrarSesionCompleta();
         document.getElementById('login-error').textContent =
           `⚠ ${email} no está autorizado para acceder a este sistema.`;
@@ -127,6 +128,18 @@
     const userInfo    = document.getElementById('user-info');
     const loginErr    = document.getElementById('login-error');
     const loginBtn    = document.getElementById('login-btn');
+
+    if (user && !emailAutorizado(user.email)) {
+      cerrarSesionCompleta().catch(() => {});
+      loginScreen.style.display = 'flex';
+      appScreen.style.display   = 'none';
+      loginErr.textContent = `⚠ ${user.email || 'Este correo'} no está autorizado para acceder a este sistema.`;
+      if (loginBtn) {
+        loginBtn.textContent = 'Iniciar sesión con Google';
+        loginBtn.disabled = false;
+      }
+      return;
+    }
 
     if (user) {
       loginScreen.style.display = 'none';
@@ -289,10 +302,13 @@
       <div class="stat-card" id="d-alertas-card"><div class="stat-icon amber">!</div><div class="stat-data"><span class="stat-val" id="d-alertas">—</span><span class="stat-label">Alertas stock</span></div></div>
     </div>
     <div id="dash-msg"></div>
-    <div class="panel">
-      <div class="panel-title">⚠ Alertas de Stock</div>
-      <div id="dash-alertas-list" style="padding:8px 0"></div>
-    </div>
+    <details class="panel stock-alert-panel" id="dash-alertas-details">
+      <summary class="stock-alert-summary">
+        <span>Alertas de Stock</span>
+        <span id="dash-alertas-summary-count" class="badge badge-bajo">0 avisos</span>
+      </summary>
+      <div id="dash-alertas-list" class="stock-alert-list"></div>
+    </details>
     <div class="panel">
       <div class="panel-title">Últimas ventas de hoy</div>
       <table class="data-table" id="dash-ventas-table">
@@ -392,7 +408,7 @@
     <div id="anch-list-msg"></div>
     <div class="panel">
       <table class="data-table">
-        <thead><tr><th>Nombre</th><th>Contenido</th><th>Precio</th><th>Acciones</th></tr></thead>
+        <thead><tr><th>Nombre</th><th>Codigo</th><th>Contenido</th><th>Precio</th><th>Acciones</th></tr></thead>
         <tbody id="anch-body"></tbody>
       </table>
     </div>
@@ -849,6 +865,7 @@
     <p id="entrada-prod-nombre" style="color:var(--teal);font-weight:600;margin-bottom:16px"></p>
     <div class="form-group"><label>Cantidad a ingresar</label><input type="number" id="ent-cantidad" min="1"/></div>
     <div class="form-group"><label>Precio de Compra (opcional, actualiza el registrado)</label><input type="number" id="ent-precio" min="0"/></div>
+    <div class="form-group"><label>Precio de Venta (opcional, actualiza el registrado)</label><input type="number" id="ent-venta" min="0"/></div>
     <div class="form-group"><label>Nota</label><input type="text" id="ent-nota" placeholder="Proveedor, lote…"/></div>
     <div class="panel" style="margin-top:8px">
       <div class="panel-title" style="font-size:0.85rem">Historial de Entradas</div>
@@ -968,6 +985,7 @@
       <div class="form-group"><label>Nombre *</label><input type="text" id="anch-nombre"/></div>
       <div class="form-group"><label>Precio de Venta *</label><input type="number" id="anch-precio" min="0"/></div>
     </div>
+    <div class="form-group"><label>Codigo de barras</label><input type="text" id="anch-codigo" placeholder="Opcional"/></div>
     <div class="form-group">
       <label>Agregar producto</label>
       <input type="text" id="anch-buscar" placeholder="Buscar producto…" oninput="buscarProductoAncheta()" autocomplete="off"/>

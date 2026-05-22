@@ -722,6 +722,34 @@ input:focus, select:focus {
 .alerta-stock  { font-family: var(--font-head); font-size: 1.3rem; font-weight: 800; }
 .alerta-card.agotado .alerta-stock { color: var(--red);   }
 .alerta-card.bajo    .alerta-stock { color: var(--amber); }
+.stock-alert-panel {
+  overflow: hidden;
+}
+.stock-alert-summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 16px 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid transparent;
+  font-family: var(--font-head);
+  font-weight: 700;
+}
+.stock-alert-summary::-webkit-details-marker { display: none; }
+.stock-alert-panel[open] .stock-alert-summary { border-bottom-color: var(--border); }
+.stock-alert-summary::after {
+  content: '▾';
+  color: var(--muted);
+  transition: transform 0.15s;
+}
+.stock-alert-panel[open] .stock-alert-summary::after { transform: rotate(180deg); }
+.stock-alert-list {
+  padding: 8px 0;
+  max-height: 360px;
+  overflow-y: auto;
+}
 
 /* ── Sugerencias búsqueda ────────────────────────────────────── */
 .sugerencias-list {
