@@ -204,10 +204,86 @@ function stockNecesarioDesdeItems(items) {
         acumularStock(mapa, sub.producto_id, (sub.cantidad || 0) * (item.cantidad || 0));
       });
     } else {
-      acumularStock(mapa, item.producto_id, item.cantidad || 0);
+      acumularStock(mapa, item.producto_id, stockCantidadItem(item));
     }
   });
   return mapa;
+}
+
+function booleanCajaActiva(value) {
+  if (value === true) return true;
+  if (value === false || value === undefined || value === null) return false;
+  if (typeof value === 'number') return value > 0;
+  const texto = String(value).trim().toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+  return ['1', 'si', 's', 'true', 'x', 'yes', 'y'].includes(texto);
+}
+
+function configCajaProducto(p) {
+  const nested = p?.venta_caja || p?.caja || {};
+  const unidades = numeroSeguro(
+    p?.caja_unidades ?? p?.unidades_por_caja ?? nested.caja_unidades ?? nested.unidades_por_caja ?? nested.unidades
+  );
+  const precioVenta = numeroSeguro(
+    p?.caja_precio_venta ?? p?.precio_venta_caja ?? nested.caja_precio_venta ?? nested.precio_venta_caja ?? nested.precio_venta
+  );
+  const compraDirecta = numeroSeguro(
+    p?.caja_precio_compra ?? p?.precio_compra_caja ?? nested.caja_precio_compra ?? nested.precio_compra_caja ?? nested.precio_compra
+  );
+  const precioCompra = compraDirecta > 0
+    ? compraDirecta
+    : (numeroSeguro(p?.precio_compra) * Math.max(1, unidades));
+  const codigo = limpiarCodigo(
+    p?.caja_codigo_barras ?? p?.codigo_barras_caja ?? nested.caja_codigo_barras ?? nested.codigo_barras_caja ?? nested.codigo_barras ?? ''
+  );
+  const activaRaw = p?.caja_activa ?? p?.venta_caja_activa ?? nested.caja_activa ?? nested.activa ?? nested.aplica;
+  const activa = booleanCajaActiva(activaRaw) && unidades > 0 && precioVenta > 0;
+  return { activa, unidades, precio_venta: precioVenta, precio_compra: precioCompra, codigo_barras: codigo };
+}
+
+function productoTieneCaja(p) {
+  return configCajaProducto(p).activa;
+}
+
+function codigoCajaProducto(p) {
+  const caja = configCajaProducto(p);
+  return caja.activa ? caja.codigo_barras : '';
+}
+
+function codigoEsCajaProducto(p, codigo) {
+  const cajaCodigo = codigoCajaProducto(p);
+  return !!cajaCodigo && cajaCodigo === limpiarCodigo(codigo);
+}
+
+function stockCantidadPorPresentacion(item, cantidad = item?.cantidad) {
+  const cant = parseFloat(cantidad) || 0;
+  if ((item?.presentacion || 'unidad') === 'caja') {
+    return cant * Math.max(1, numeroSeguro(item?.caja_unidades));
+  }
+  return cant;
+}
+
+function stockCantidadItem(item) {
+  const explicita = parseFloat(item?.stock_cantidad);
+  if (Number.isFinite(explicita) && explicita > 0) return explicita;
+  return stockCantidadPorPresentacion(item);
+}
+
+function textoMetaCarrito(item) {
+  if ((item.presentacion || 'unidad') === 'caja') {
+    const unidades = Math.max(1, numeroSeguro(item.caja_unidades));
+    const descuenta = stockCantidadPorPresentacion(item);
+    return `Caja x${fmt(unidades)} unidades - descuenta ${fmt(descuenta)} unidades`;
+  }
+  return item.unidad || 'unidades';
+}
+
+function stockEnCarritoProducto(productoId, itemIgnorado = null) {
+  return carrito.reduce((sum, item) => {
+    if (item === itemIgnorado || item._ancheta_id || item.producto_id !== productoId) return sum;
+    return sum + stockCantidadItem(item);
+  }, 0);
 }
 
 // ── State ─────────────────────────────────────────────
@@ -219,6 +295,8 @@ let productoGuardando   = false;
 let entradaProductoId   = null;
 let productoParaCarrito = null;
 let anchetaParaCarrito  = null;
+let presentacionParaCarrito = 'unidad';
+let productoPresentacionPendiente = null;
 let codigoProductoId    = null;
 let etiquetasCodigo     = [];
 let etiquetasCodigoCargadas = false;
@@ -231,6 +309,8 @@ let scannerQuaggaHandler = null;
 let scannerEngine       = '';
 let scannerFallbackTimer = null;
 let scannerDestino      = 'producto';
+let scannerLecturaPendiente = null;
+let scannerRetryTimer = null;
 let codigosAlternativosProductoModal = [];
 let calAnio = new Date().getFullYear();
 let calMes  = new Date().getMonth() + 1;
@@ -1211,18 +1291,30 @@ window.restaurarAuditoriaIgnorados = async function() {
 /* ═══════════════════════════════════════════════════════
    MODAL PRODUCTO
 ═══════════════════════════════════════════════════════ */
+function setProductoCajaVisible() {
+  const activa = Boolean($('p-caja-activa')?.checked);
+  const fields = $('p-caja-fields');
+  if (fields) fields.hidden = !activa;
+}
+
+window.toggleProductoCaja = function() {
+  setProductoCajaVisible();
+};
+
 window.openModalProducto = function(id) {
   editandoProductoId = id || null;
   $('modal-titulo').textContent   = id ? 'Editar Producto' : 'Nuevo Producto';
   $('modal-save-btn').textContent = id ? 'Actualizar' : 'Guardar';
   $('modal-msg').innerHTML = '';
   $('margen-display') && ($('margen-display').style.display = 'none');
-  ['p-nombre','p-categoria','p-compra','p-venta','p-stock','p-barras','p-alt-barras-input'].forEach(f => {
+  ['p-nombre','p-categoria','p-compra','p-venta','p-stock','p-barras','p-alt-barras-input','p-caja-unidades','p-caja-venta','p-caja-compra','p-caja-barras'].forEach(f => {
     if ($(f)) $(f).value = '';
   });
   codigosAlternativosProductoModal = [];
   $('p-stockmin').value = 5;
   $('p-unidad').value   = 'unidades';
+  if ($('p-caja-activa')) $('p-caja-activa').checked = false;
+  setProductoCajaVisible();
 
   if (id) {
     const p = productos.find(x => x.id === id);
@@ -1235,7 +1327,14 @@ window.openModalProducto = function(id) {
       $('p-stockmin').value  = p.stock_minimo;
       $('p-barras').value    = p.codigo_barras || '';
       codigosAlternativosProductoModal = codigosAlternativosProducto(p);
-      $('p-unidad').value    = p.unidad;
+      $('p-unidad').value    = p.unidad || 'unidades';
+      const caja = configCajaProducto(p);
+      if ($('p-caja-activa')) $('p-caja-activa').checked = caja.activa;
+      if ($('p-caja-unidades')) $('p-caja-unidades').value = caja.unidades || '';
+      if ($('p-caja-venta')) $('p-caja-venta').value = caja.precio_venta || '';
+      if ($('p-caja-compra')) $('p-caja-compra').value = caja.precio_compra || '';
+      if ($('p-caja-barras')) $('p-caja-barras').value = caja.codigo_barras || '';
+      setProductoCajaVisible();
       calcMargen();
     }
   }
@@ -1290,12 +1389,17 @@ window.agregarCodigoAlternativoProducto = function() {
 function agregarCodigoAlternativoDesdeValor(valor, origen = 'manual') {
   const codigo = limpiarCodigo(valor || '');
   const principal = limpiarCodigo($('p-barras')?.value || '');
+  const caja = limpiarCodigo($('p-caja-barras')?.value || '');
   if (!codigo) {
     showMsg('modal-msg', 'Escribe un código alternativo válido.', 'warn');
     return false;
   }
   if (principal && codigo === principal) {
     showMsg('modal-msg', 'Ese código ya está como código principal.', 'warn');
+    return false;
+  }
+  if (caja && codigo === caja) {
+    showMsg('modal-msg', 'Ese codigo ya esta como codigo de caja.', 'warn');
     return false;
   }
   if (codigosAlternativosProductoModal.includes(codigo)) {
@@ -1319,7 +1423,7 @@ window.quitarCodigoAlternativoProducto = function(codigo) {
   renderCodigosAlternativosProducto();
 };
 
-async function validarCodigosProductoModal(codigoPrincipal, codigosAlternativos) {
+async function validarCodigosProductoModal(codigoPrincipal, codigosAlternativos, codigoCaja = '') {
   const vistos = new Set();
   const revisar = [];
   const agregar = codigo => {
@@ -1334,6 +1438,7 @@ async function validarCodigosProductoModal(codigoPrincipal, codigosAlternativos)
 
   agregar(codigoPrincipal);
   codigosAlternativos.forEach(agregar);
+  agregar(codigoCaja);
 
   if (revisar.length === 0) return;
   showMsg('modal-msg', 'Revisando códigos de barras...', 'ok');
@@ -1361,8 +1466,22 @@ async function guardarProductoInterno() {
     return;
   }
 
+  const cajaActiva = Boolean($('p-caja-activa')?.checked);
+  const cajaUnidades = parseFloat($('p-caja-unidades')?.value) || 0;
+  const cajaPrecioVenta = parseFloat($('p-caja-venta')?.value) || 0;
+  const cajaPrecioCompra = parseFloat($('p-caja-compra')?.value) || 0;
+  const cajaCodigo = limpiarCodigo($('p-caja-barras')?.value || '');
+  if (cajaActiva && (cajaUnidades <= 0 || cajaPrecioVenta <= 0)) {
+    showMsg('modal-msg', 'Para vender por caja indica unidades por caja y precio de venta.', 'error');
+    return;
+  }
+  if (cajaActiva && !Number.isInteger(cajaUnidades)) {
+    showMsg('modal-msg', 'Las unidades por caja deben ser un numero entero.', 'error');
+    return;
+  }
+
   try {
-    await validarCodigosProductoModal(codigoBarras, codigosAlternativosProductoModal);
+    await validarCodigosProductoModal(codigoBarras, codigosAlternativosProductoModal, cajaActiva ? cajaCodigo : '');
   } catch (e) {
     showMsg('modal-msg', escapeHtml(e.message || 'Hay un código de barras repetido.'), 'error');
     return;
@@ -1377,7 +1496,12 @@ async function guardarProductoInterno() {
     stock_minimo:  parseFloat($('p-stockmin').value) || 5,
     codigo_barras: codigoBarras,
     codigos_alternativos: [...codigosAlternativosProductoModal],
-    unidad:        $('p-unidad').value
+    unidad:        $('p-unidad').value,
+    caja_activa: cajaActiva,
+    caja_unidades: cajaActiva ? cajaUnidades : 0,
+    caja_precio_venta: cajaActiva ? cajaPrecioVenta : 0,
+    caja_precio_compra: cajaActiva ? cajaPrecioCompra : 0,
+    caja_codigo_barras: cajaActiva ? cajaCodigo : ''
   };
 
   if (editandoProductoId) {
@@ -1484,6 +1608,7 @@ function detenerEscanerBarras() {
   detenerCamaraNativa();
   detenerQuaggaScanner();
   limpiarVistaScanner();
+  resetConfirmacionScanner();
 }
 
 window.cerrarEscanerBarras = function() {
@@ -1502,9 +1627,62 @@ function scannerMsgTarget(destino = scannerDestino) {
   return 'modal-msg';
 }
 
+function ocultarRetryScanner() {
+  const overlay = $('scanner-retry-overlay');
+  if (overlay) overlay.classList.remove('show');
+  if (scannerRetryTimer) clearTimeout(scannerRetryTimer);
+  scannerRetryTimer = null;
+}
+
+function mostrarRetryScanner(text = 'La lectura no fue estable.') {
+  const overlay = $('scanner-retry-overlay');
+  if (overlay) {
+    const msg = overlay.querySelector('span');
+    if (msg) msg.textContent = text;
+    overlay.classList.add('show');
+  }
+  setScannerMsg('Lectura inestable. Vuelve a intentar.', 'warn');
+  if (scannerRetryTimer) clearTimeout(scannerRetryTimer);
+  scannerRetryTimer = setTimeout(ocultarRetryScanner, 900);
+}
+
+function resetConfirmacionScanner() {
+  scannerLecturaPendiente = null;
+  ocultarRetryScanner();
+}
+
+function lecturaScannerAceptada(codigo, motor) {
+  const limpio = limpiarCodigo(codigo);
+  if (!/^[A-Z0-9._-]{4,32}$/.test(limpio)) {
+    mostrarRetryScanner('Codigo demasiado corto o raro.');
+    return false;
+  }
+
+  const ahora = Date.now();
+  const previa = scannerLecturaPendiente;
+  if (!previa || previa.codigo !== limpio || (ahora - previa.lastAt) > 1800) {
+    if (previa && previa.codigo !== limpio) {
+      mostrarRetryScanner('La camara detecto dos codigos distintos.');
+    } else {
+      setScannerMsg('Mantén fijo el codigo para confirmar la lectura...', 'warn');
+    }
+    scannerLecturaPendiente = { codigo: limpio, count: 1, lastAt: ahora };
+    return false;
+  }
+
+  scannerLecturaPendiente = { codigo: limpio, count: previa.count + 1, lastAt: ahora };
+  const lecturasNecesarias = 3;
+  if (scannerLecturaPendiente.count < lecturasNecesarias) {
+    setScannerMsg(`Confirmando lectura ${scannerLecturaPendiente.count}/${lecturasNecesarias}...`, 'warn');
+    return false;
+  }
+  return true;
+}
+
 function completarEscaneoBarras(codigo, motor = 'lector') {
   const limpio = limpiarCodigo(codigo);
-  if (!scannerActive || !limpio) return;
+  if (!scannerActive || !limpio) return false;
+  if (!lecturaScannerAceptada(limpio, motor)) return false;
   if (scannerDestino === 'inventario') {
     aplicarCodigoEscaneadoInventario(limpio, motor);
   } else if (scannerDestino === 'venta') {
@@ -1514,7 +1692,11 @@ function completarEscaneoBarras(codigo, motor = 'lector') {
     if (producto) {
       $('venta-sugerencias').innerHTML = '';
       showMsg('venta-msg', `Producto escaneado: ${producto.nombre} (${motor})`, 'ok');
-      window.abrirModalCantidad({ ...producto, _tipo: 'producto' });
+      if (productoTieneCaja(producto)) {
+        abrirModalPresentacionVenta({ ...producto, _tipo: 'producto' }, codigoEsCajaProducto(producto, limpio) ? 'caja' : 'unidad');
+      } else {
+        window.abrirModalCantidad({ ...producto, _tipo: 'producto' });
+      }
     } else {
       window.buscarProductoVenta();
       showMsg('venta-msg', `Codigo escaneado: ${limpio}. No hay producto exacto.`, 'warn');
@@ -1528,6 +1710,7 @@ function completarEscaneoBarras(codigo, motor = 'lector') {
     showMsg('modal-msg', `Codigo escaneado: ${limpio} (${motor})`, 'ok');
   }
   window.cerrarEscanerBarras();
+  return true;
 }
 
 function crearLectorScanner() {
@@ -1651,8 +1834,8 @@ async function iniciarDetectorNativo(onResult) {
       const encontrados = await detector.detect(video);
       const codigo = limpiarCodigo(encontrados?.[0]?.rawValue || '');
       if (codigo) {
-        onResult(codigo, 'nativo');
-        return;
+        const aceptado = onResult(codigo, 'nativo');
+        if (aceptado) return;
       }
     } catch (e) {
       console.warn('Detector nativo fallo:', e.message || e);
@@ -1704,6 +1887,7 @@ async function iniciarQuaggaScanner(onResult) {
   detenerZxingScanner();
   detenerCamaraNativa();
   limpiarVistaScanner();
+  resetConfirmacionScanner();
 
   const frame = $('scanner-frame');
   const target = $('scanner-quagga');
@@ -1749,6 +1933,7 @@ async function iniciarZxingScanner(onResult) {
   detenerQuaggaScanner();
   detenerCamaraNativa();
   limpiarVistaScanner();
+  resetConfirmacionScanner();
   const video = $('scanner-video');
   scannerEngine = 'zxing';
   scannerReader = crearLectorScanner();
@@ -1793,6 +1978,7 @@ window.abrirEscanerBarras = async function(destino = 'producto') {
 
   scannerDestino = destino;
   scannerActive = true;
+  resetConfirmacionScanner();
   openModal('modal-scanner');
   setScannerMsg('Abriendo camara...', 'ok');
 
@@ -1957,22 +2143,65 @@ window.buscarProductoVenta = async function() {
     return `<div class="sugerencia-item" onclick='abrirModalCantidad(${JSON.stringify(item)})'>
       <div>
         <div>${item.nombre}</div>
-        <div class="sug-stock">${item.stock} ${item.unidad} disponibles</div>
+        <div class="sug-stock">${item.stock} ${item.unidad} disponibles${productoTieneCaja(item) ? ' - caja disponible' : ''}</div>
       </div>
       <span class="sug-precio">${fmtCOP(item.precio_venta)}</span>
     </div>`;
   }).join('')}</div>`;
 };
 
-window.abrirModalCantidad = function(p) {
+function abrirModalPresentacionVenta(p, sugerida = 'unidad') {
+  productoPresentacionPendiente = p;
+  const caja = configCajaProducto(p);
+  $('mpv-nombre').textContent = p.nombre;
+  $('mpv-stock').textContent = `Stock actual: ${fmt(p.stock)} ${p.unidad || 'unidades'}`;
+  $('mpv-unidad-precio').textContent = fmtCOP(p.precio_venta || 0);
+  $('mpv-caja-precio').textContent = fmtCOP(caja.precio_venta || 0);
+  $('mpv-caja-detalle').textContent = `Descuenta ${fmt(caja.unidades)} unidades por caja`;
+  $('mpv-unidad')?.classList.toggle('recommended', sugerida !== 'caja');
+  $('mpv-caja')?.classList.toggle('recommended', sugerida === 'caja');
+  $('venta-sugerencias').innerHTML = '';
+  openModal('modal-presentacion-venta');
+}
+
+window.seleccionarPresentacionVenta = function(tipo) {
+  const p = productoPresentacionPendiente;
+  if (!p) return;
+  productoPresentacionPendiente = null;
+  closeModal('modal-presentacion-venta');
+  abrirModalCantidadProducto(p, tipo === 'caja' ? 'caja' : 'unidad');
+};
+
+function abrirModalCantidadProducto(p, presentacion = 'unidad') {
   productoParaCarrito = p;
   anchetaParaCarrito  = null;
-  $('mcant-nombre').textContent = p.nombre;
-  $('mcant-label').textContent  = `Cantidad (${p.unidad})`;
-  $('mcant-stock').textContent  = `${p.stock} ${p.unidad}`;
+  presentacionParaCarrito = presentacion === 'caja' && productoTieneCaja(p) ? 'caja' : 'unidad';
+  const caja = configCajaProducto(p);
+  if (presentacionParaCarrito === 'caja') {
+    const cajasDisponibles = caja.unidades > 0 ? Math.floor((p.stock || 0) / caja.unidades) : 0;
+    $('mcant-nombre').textContent = `${p.nombre} - Caja`;
+    $('mcant-label').textContent  = 'Cantidad (cajas)';
+    $('mcant-stock').textContent  = `${cajasDisponibles} cajas (${fmt(p.stock)} unidades)`;
+    $('mcant-val').min = 1;
+    $('mcant-val').step = 1;
+  } else {
+    $('mcant-nombre').textContent = p.nombre;
+    $('mcant-label').textContent  = `Cantidad (${p.unidad})`;
+    $('mcant-stock').textContent  = `${p.stock} ${p.unidad}`;
+    $('mcant-val').min = 0.01;
+    $('mcant-val').step = 0.01;
+  }
   $('mcant-val').value = 1;
   $('venta-sugerencias').innerHTML = '';
   openModal('modal-cantidad');
+}
+
+window.abrirModalCantidad = function(p, sugerida = null) {
+  if (productoTieneCaja(p) && !sugerida) {
+    abrirModalPresentacionVenta(p, 'unidad');
+    return;
+  }
+  abrirModalCantidadProducto(p, sugerida || 'unidad');
 };
 
 window.abrirModalCantidadAncheta = function(a) {
@@ -2012,23 +2241,36 @@ window.confirmarAgregarCarrito = function() {
     }
     anchetaParaCarrito = null;
   } else if (productoParaCarrito) {
-    if (cant > productoParaCarrito.stock) { alert('Stock insuficiente'); return; }
-    const existing = carrito.find(c => c.producto_id === productoParaCarrito.id);
+    const presentacion = presentacionParaCarrito === 'caja' && productoTieneCaja(productoParaCarrito) ? 'caja' : 'unidad';
+    const caja = configCajaProducto(productoParaCarrito);
+    if (presentacion === 'caja' && !Number.isInteger(cant)) { alert('La cantidad de cajas debe ser un numero entero'); return; }
+    const stockSolicitado = presentacion === 'caja' ? cant * caja.unidades : cant;
+    const existing = carrito.find(c => c.producto_id === productoParaCarrito.id && (c.presentacion || 'unidad') === presentacion);
+    const stockYaReservado = stockEnCarritoProducto(productoParaCarrito.id, existing || null);
+    if (stockYaReservado + stockSolicitado > productoParaCarrito.stock) { alert('Stock insuficiente'); return; }
     if (existing) {
-      if (existing.cantidad + cant > productoParaCarrito.stock) { alert('Stock insuficiente'); return; }
+      const nuevaCantidad = existing.cantidad + cant;
+      const nuevoStockSolicitado = stockCantidadPorPresentacion(existing, nuevaCantidad);
+      if (stockYaReservado + nuevoStockSolicitado > productoParaCarrito.stock) { alert('Stock insuficiente'); return; }
       existing.cantidad += cant;
+      existing.stock_cantidad = nuevoStockSolicitado;
     }
     else {
+      const esCaja = presentacion === 'caja';
       carrito.push({
         producto_id:     productoParaCarrito.id,
-        nombre_producto: productoParaCarrito.nombre,
+        nombre_producto: esCaja ? `${productoParaCarrito.nombre} (Caja x${fmt(caja.unidades)})` : productoParaCarrito.nombre,
         cantidad:        cant,
-        precio_unitario: productoParaCarrito.precio_venta,
-        precio_compra:   productoParaCarrito.precio_compra || 0,
-        unidad:          productoParaCarrito.unidad
+        precio_unitario: esCaja ? caja.precio_venta : productoParaCarrito.precio_venta,
+        precio_compra:   esCaja ? caja.precio_compra : (productoParaCarrito.precio_compra || 0),
+        unidad:          esCaja ? 'cajas' : productoParaCarrito.unidad,
+        presentacion,
+        caja_unidades:   esCaja ? caja.unidades : 1,
+        stock_cantidad:  stockSolicitado
       });
     }
     productoParaCarrito = null;
+    presentacionParaCarrito = 'unidad';
   }
 
   closeModal('modal-cantidad');
@@ -2043,7 +2285,10 @@ function renderCarrito() {
   } else {
     cont.innerHTML = carrito.map((item, i) => `
       <div class="cart-item">
-        <div class="cart-item-name">${item.nombre_producto}</div>
+        <div class="cart-item-main">
+          <div class="cart-item-name">${item.nombre_producto}</div>
+          <div class="cart-item-meta">${textoMetaCarrito(item)}</div>
+        </div>
         <input class="cart-item-qty" type="number" min="0.01" step="0.01" value="${item.cantidad}"
           onchange="actualizarCantCarrito(${i}, this.value)"/>
         <div class="cart-item-sub">${fmtCOP(item.cantidad * item.precio_unitario)}</div>
@@ -2059,7 +2304,10 @@ window.actualizarCantCarrito = function(i, val) {
     const item = carrito[i];
     if (item && !item._ancheta_id) {
       const p = productos.find(x => x.id === item.producto_id);
-      if (p && v > p.stock) { alert('Stock insuficiente'); renderCarrito(); return; }
+      const stockSolicitado = stockCantidadPorPresentacion(item, v);
+      const stockOtrosItems = stockEnCarritoProducto(item.producto_id, item);
+      if (p && stockOtrosItems + stockSolicitado > p.stock) { alert('Stock insuficiente'); renderCarrito(); return; }
+      item.stock_cantidad = stockSolicitado;
     }
     carrito[i].cantidad = v;
   }
@@ -2068,6 +2316,9 @@ window.actualizarCantCarrito = function(i, val) {
 window.eliminarCarrito  = function(i) { carrito.splice(i, 1); renderCarrito(); };
 window.limpiarCarrito   = function() {
   carrito = [];
+  productoParaCarrito = null;
+  anchetaParaCarrito = null;
+  presentacionParaCarrito = 'unidad';
   $('cart-descuento').value    = '';
   $('cart-efectivo').value     = '';
   $('cart-vuelto').textContent = '—';
@@ -2507,7 +2758,12 @@ const PRODUCTOS_EXPORT_FIELDS = [
   'stock_minimo',
   'codigo_barras',
   'codigos_alternativos',
-  'unidad'
+  'unidad',
+  'caja_activa',
+  'caja_unidades',
+  'caja_precio_venta',
+  'caja_precio_compra',
+  'caja_codigo_barras'
 ];
 let backupImportFormato = 'json';
 let backupImportPendiente = null;
@@ -2626,6 +2882,7 @@ function contarDocsRespaldo(backup) {
 }
 
 function productoFilaExportacion(p) {
+  const caja = configCajaProducto(p);
   return {
     id: p.id || '',
     nombre: p.nombre || '',
@@ -2636,7 +2893,12 @@ function productoFilaExportacion(p) {
     stock_minimo: numeroSeguro(p.stock_minimo),
     codigo_barras: limpiarCodigo(p.codigo_barras || ''),
     codigos_alternativos: codigosAlternativosProducto(p).join(', '),
-    unidad: p.unidad || 'unidades'
+    unidad: p.unidad || 'unidades',
+    caja_activa: caja.activa ? 'si' : 'no',
+    caja_unidades: caja.activa ? caja.unidades : '',
+    caja_precio_venta: caja.activa ? caja.precio_venta : '',
+    caja_precio_compra: caja.activa ? caja.precio_compra : '',
+    caja_codigo_barras: caja.activa ? caja.codigo_barras : ''
   };
 }
 
@@ -2727,6 +2989,11 @@ function textoImportacion(value) {
   return texto ? texto : undefined;
 }
 
+function booleanImportacion(value) {
+  if (value === undefined || value === null || String(value).trim() === '') return undefined;
+  return booleanCajaActiva(value);
+}
+
 function codigosAlternativosImportacion(value, codigoPrincipal = '') {
   const principal = limpiarCodigo(codigoPrincipal);
   const raw = Array.isArray(value) ? value : String(value || '').split(/[,\n;|]+/);
@@ -2761,12 +3028,25 @@ function normalizarProductoImportacion(row) {
   const compra = numeroImportacion(valorFilaImportacion(row, ['precio_compra', 'p_compra', 'compra', 'costo']));
   const venta = numeroImportacion(valorFilaImportacion(row, ['precio_venta', 'p_venta', 'venta', 'precio']));
   const stock = numeroImportacion(valorFilaImportacion(row, ['stock', 'cantidad', 'existencias']));
+  const cajaActiva = booleanImportacion(valorFilaImportacion(row, ['caja_activa', 'venta_caja_activa', 'aplica_caja', 'vende_caja']));
+  const cajaUnidades = numeroImportacion(valorFilaImportacion(row, ['caja_unidades', 'unidades_por_caja', 'unidades caja', 'unds caja']));
+  const cajaVenta = numeroImportacion(valorFilaImportacion(row, ['caja_precio_venta', 'precio_venta_caja', 'venta_caja']));
+  const cajaCompra = numeroImportacion(valorFilaImportacion(row, ['caja_precio_compra', 'precio_compra_caja', 'compra_caja']));
+  const cajaCodigo = limpiarCodigo(valorFilaImportacion(row, ['caja_codigo_barras', 'codigo_barras_caja', 'codigo caja', 'barcode caja']) || '');
   const stockMin = numeroImportacion(valorFilaImportacion(row, ['stock_minimo', 'stock minimo', 'minimo', 'mínimo', 'min']));
 
   if (compra !== undefined) data.precio_compra = compra;
   if (venta !== undefined) data.precio_venta = venta;
   if (stock !== undefined) data.stock = stock;
   if (stockMin !== undefined) data.stock_minimo = stockMin;
+  if (cajaActiva !== undefined) data.caja_activa = cajaActiva;
+  if (cajaUnidades !== undefined) data.caja_unidades = cajaUnidades;
+  if (cajaVenta !== undefined) data.caja_precio_venta = cajaVenta;
+  if (cajaCompra !== undefined) data.caja_precio_compra = cajaCompra;
+  if (cajaCodigo) data.caja_codigo_barras = cajaCodigo;
+  if (data.caja_activa === undefined && (cajaUnidades !== undefined || cajaVenta !== undefined || cajaCodigo)) {
+    data.caja_activa = (cajaUnidades || 0) > 0 && (cajaVenta || 0) > 0;
+  }
 
   return { id, codigo, nombre, categoria, data };
 }
@@ -2864,7 +3144,7 @@ function analizarImportacionProductos(filas, existentes, origen = 'archivo') {
   filas.forEach((row, index) => {
     const parsed = normalizarProductoImportacion(row);
     if (!parsed.id && !parsed.codigo && !parsed.nombre && Object.keys(parsed.data).length === 0) return;
-    const codigosParsed = [parsed.codigo, ...(parsed.data.codigos_alternativos || [])]
+    const codigosParsed = [parsed.codigo, parsed.data.caja_codigo_barras, ...(parsed.data.codigos_alternativos || [])]
       .map(limpiarCodigo)
       .filter(Boolean);
     if (parsed.id) {
@@ -3347,7 +3627,7 @@ function codigosAlternativosProducto(p) {
     });
 }
 
-function codigosProducto(p, incluirPrincipal = true) {
+function codigosProducto(p, incluirPrincipal = true, incluirCaja = true) {
   const vistos = new Set();
   const lista = [];
   const agregar = codigo => {
@@ -3357,6 +3637,7 @@ function codigosProducto(p, incluirPrincipal = true) {
     lista.push(limpio);
   };
   if (incluirPrincipal) agregar(p?.codigo_barras || '');
+  if (incluirCaja) agregar(codigoCajaProducto(p));
   codigosAlternativosProducto(p).forEach(agregar);
   return lista;
 }
@@ -3381,7 +3662,8 @@ async function productoDuplicadoPorCodigoFirebase(codigo, exceptoId = null) {
 
   const consultas = [
     query(collection(db(), 'productos'), where('codigo_barras', '==', buscado), limit(3)),
-    query(collection(db(), 'productos'), where('codigos_alternativos', 'array-contains', buscado), limit(3))
+    query(collection(db(), 'productos'), where('codigos_alternativos', 'array-contains', buscado), limit(3)),
+    query(collection(db(), 'productos'), where('caja_codigo_barras', '==', buscado), limit(3))
   ];
   const snaps = await Promise.all(consultas.map(q => getDocs(q)));
   for (const snap of snaps) {
