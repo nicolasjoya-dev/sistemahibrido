@@ -963,13 +963,13 @@ document.addEventListener('keydown', e => {
     const input = e.target;
     const limpio = limpiarCodigo(input.value || '');
     const ahora = Date.now();
-    const codigoDoble = codigoDobleEscaneoDesdeValor(limpio, invUltimoCodigoEscaneado, invUltimoCodigoEscaneadoEn, ahora);
+    const codigoDoble = codigoDobleEscaneoDesdeValor(input.value || '', invUltimoCodigoEscaneado, invUltimoCodigoEscaneadoEn, ahora);
     if (codigoDoble) {
       e.preventDefault();
       limpiarBusquedaInventarioPorDoble(input, codigoDoble);
       return;
     }
-    if (limpio) registrarCodigoInventarioEscaneado(limpio, ahora);
+    if (limpio && valorEsCodigoExacto(input.value || '')) registrarCodigoInventarioEscaneado(limpio, ahora);
     else resetEscaneoInventario();
     filtrarInventario();
     return;
@@ -979,13 +979,13 @@ document.addEventListener('keydown', e => {
     const input = e.target;
     const limpio = limpiarCodigo(input.value || '');
     const ahora = Date.now();
-    const codigoDoble = codigoDobleEscaneoDesdeValor(limpio, ventaUltimoCodigoEscaneado, ventaUltimoCodigoEscaneadoEn, ahora);
+    const codigoDoble = codigoDobleEscaneoDesdeValor(input.value || '', ventaUltimoCodigoEscaneado, ventaUltimoCodigoEscaneadoEn, ahora);
     if (codigoDoble) {
       e.preventDefault();
       limpiarBusquedaVentaPorDoble(input, codigoDoble);
       return;
     }
-    if (limpio) {
+    if (limpio && valorEsCodigoExacto(input.value || '')) {
       registrarCodigoVentaEscaneado(limpio, ahora);
       const exacto = valorPareceCodigoEscaneado(input.value || '') ? ventaItemConCodigoExacto(limpio) : null;
       if (exacto) abrirVentaItemExacto(exacto, limpio, 'lector');
@@ -1016,8 +1016,16 @@ function limpiarBusquedaVentaPorDoble(input, codigo) {
   showMsg('venta-msg', `Busqueda limpiada: ${codigo} escaneado dos veces.`, 'ok');
 }
 
-function codigoDobleEscaneoDesdeValor(limpio, ultimoCodigo, ultimoEn, ahora = Date.now()) {
+function valorEsCodigoExacto(valor) {
+  const raw = String(valor || '');
+  const limpio = limpiarCodigo(raw);
+  return !!limpio && raw.toUpperCase() === limpio;
+}
+
+function codigoDobleEscaneoDesdeValor(valor, ultimoCodigo, ultimoEn, ahora = Date.now()) {
+  const limpio = limpiarCodigo(valor);
   if (!limpio || !ultimoCodigo || ahora - ultimoEn > INV_SCAN_CLEAR_MS) return '';
+  if (!valorEsCodigoExacto(valor)) return '';
   if (limpio === ultimoCodigo) return ultimoCodigo;
   if (limpio === ultimoCodigo + ultimoCodigo) return ultimoCodigo;
   return '';
@@ -1160,7 +1168,7 @@ window.filtrarInventario = function(desdeBusqueda = false) {
   const valor = input?.value || '';
   const limpio = limpiarCodigo(valor);
   const ahora = Date.now();
-  const codigoDoble = codigoDobleEscaneoDesdeValor(limpio, invUltimoCodigoEscaneado, invUltimoCodigoEscaneadoEn, ahora);
+  const codigoDoble = codigoDobleEscaneoDesdeValor(valor, invUltimoCodigoEscaneado, invUltimoCodigoEscaneadoEn, ahora);
   if (desdeBusqueda && codigoDoble) {
     limpiarBusquedaInventarioPorDoble(input, codigoDoble);
     return;
@@ -2433,7 +2441,7 @@ window.buscarProductoVenta = async function() {
   const qLow = q.toLowerCase();
   const qCode = limpiarCodigo(q);
   const ahora = Date.now();
-  const codigoDoble = codigoDobleEscaneoDesdeValor(qCode, ventaUltimoCodigoEscaneado, ventaUltimoCodigoEscaneadoEn, ahora);
+  const codigoDoble = codigoDobleEscaneoDesdeValor(q, ventaUltimoCodigoEscaneado, ventaUltimoCodigoEscaneadoEn, ahora);
   if (codigoDoble) {
     limpiarBusquedaVentaPorDoble(input, codigoDoble);
     return;
