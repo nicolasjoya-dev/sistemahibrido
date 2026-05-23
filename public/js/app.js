@@ -419,13 +419,14 @@ const INV_PAGE_SIZE = 50;
 const COD_BATCH_SIZE = 50;
 const COD_SEQ_DIGITS = 5;
 const INV_SCAN_CLEAR_MS = 5000;
-const INV_SCAN_ENTER_GRACE_MS = 600;
 let invPagina = 0;
 let invFiltro = '';
 let invCodigoFiltro = 'todos';
 let invCategoriaFiltro = '';
 let invUltimoCodigoEscaneado = '';
 let invUltimoCodigoEscaneadoEn = 0;
+let ventaUltimoCodigoEscaneado = '';
+let ventaUltimoCodigoEscaneadoEn = 0;
 let auditoriaIgnorados = new Map();
 let auditoriaIgnoradosCargados = false;
 let auditoriaIssuesActuales = new Map();
@@ -956,19 +957,71 @@ document.addEventListener('click', e => {
 });
 
 document.addEventListener('keydown', e => {
-  if (e.key !== 'Enter' || e.target?.id !== 'inv-search') return;
-  const input = e.target;
-  const limpio = limpiarCodigo(input.value || '');
-  const ahora = Date.now();
-  const pasoEnterFinalPrimerEscaneo = ahora - invUltimoCodigoEscaneadoEn <= INV_SCAN_ENTER_GRACE_MS;
-  if (limpio && !pasoEnterFinalPrimerEscaneo && codigoInventarioEscaneadoDosVeces(limpio, ahora)) {
-    e.preventDefault();
-    input.value = '';
-    resetEscaneoInventario();
+  if (e.key !== 'Enter') return;
+
+  if (e.target?.id === 'inv-search') {
+    const input = e.target;
+    const limpio = limpiarCodigo(input.value || '');
+    const ahora = Date.now();
+    const codigoDoble = codigoDobleEscaneoDesdeValor(limpio, invUltimoCodigoEscaneado, invUltimoCodigoEscaneadoEn, ahora);
+    if (codigoDoble) {
+      e.preventDefault();
+      limpiarBusquedaInventarioPorDoble(input, codigoDoble);
+      return;
+    }
+    if (limpio) registrarCodigoInventarioEscaneado(limpio, ahora);
+    else resetEscaneoInventario();
     filtrarInventario();
-    showMsg('inv-msg', `Busqueda limpiada: ${limpio} escaneado dos veces.`, 'ok');
+    return;
+  }
+
+  if (e.target?.id === 'venta-buscar') {
+    const input = e.target;
+    const limpio = limpiarCodigo(input.value || '');
+    const ahora = Date.now();
+    const codigoDoble = codigoDobleEscaneoDesdeValor(limpio, ventaUltimoCodigoEscaneado, ventaUltimoCodigoEscaneadoEn, ahora);
+    if (codigoDoble) {
+      e.preventDefault();
+      limpiarBusquedaVentaPorDoble(input, codigoDoble);
+      return;
+    }
+    if (limpio) {
+      registrarCodigoVentaEscaneado(limpio, ahora);
+      const exacto = valorPareceCodigoEscaneado(input.value || '') ? ventaItemConCodigoExacto(limpio) : null;
+      if (exacto) abrirVentaItemExacto(exacto, limpio, 'lector');
+      else window.buscarProductoVenta?.();
+    } else {
+      resetEscaneoVenta();
+      window.buscarProductoVenta?.();
+    }
   }
 });
+
+function limpiarBusquedaInventarioPorDoble(input, codigo) {
+  if (input) input.value = '';
+  resetEscaneoInventario();
+  invFiltro = '';
+  invCodigoFiltro = $('inv-codigo-filtro')?.value || 'todos';
+  invCategoriaFiltro = $('inv-categoria-filtro')?.value || '';
+  invPagina = 0;
+  renderInventarioPaginado();
+  showMsg('inv-msg', `Busqueda limpiada: ${codigo} escaneado dos veces.`, 'ok');
+}
+
+function limpiarBusquedaVentaPorDoble(input, codigo) {
+  if (input) input.value = '';
+  resetEscaneoVenta();
+  const cont = $('venta-sugerencias');
+  if (cont) cont.innerHTML = '';
+  showMsg('venta-msg', `Busqueda limpiada: ${codigo} escaneado dos veces.`, 'ok');
+}
+
+function codigoDobleEscaneoDesdeValor(limpio, ultimoCodigo, ultimoEn, ahora = Date.now()) {
+  if (!limpio || !ultimoCodigo || ahora - ultimoEn > INV_SCAN_CLEAR_MS) return '';
+  if (limpio === ultimoCodigo) return ultimoCodigo;
+  if (limpio === ultimoCodigo + ultimoCodigo) return ultimoCodigo;
+  return '';
+}
 
 function productosInventarioFiltrados() {
   return productos.filter(p => {
@@ -1061,6 +1114,24 @@ function registrarCodigoInventarioEscaneado(codigo, ahora = Date.now()) {
   invUltimoCodigoEscaneadoEn = ahora;
 }
 
+function resetEscaneoVenta() {
+  ventaUltimoCodigoEscaneado = '';
+  ventaUltimoCodigoEscaneadoEn = 0;
+}
+
+function codigoVentaEscaneadoDosVeces(codigo, ahora = Date.now()) {
+  return !!codigo &&
+    ventaUltimoCodigoEscaneado === codigo &&
+    ahora - ventaUltimoCodigoEscaneadoEn <= INV_SCAN_CLEAR_MS;
+}
+
+function registrarCodigoVentaEscaneado(codigo, ahora = Date.now()) {
+  const limpio = limpiarCodigo(codigo);
+  if (!limpio) return;
+  ventaUltimoCodigoEscaneado = limpio;
+  ventaUltimoCodigoEscaneadoEn = ahora;
+}
+
 function valorPareceCodigoEscaneado(valor) {
   const raw = String(valor || '').trim();
   const limpio = limpiarCodigo(raw);
@@ -1074,10 +1145,7 @@ function aplicarCodigoEscaneadoInventario(codigo, motor = 'lector') {
 
   const ahora = Date.now();
   if (codigoInventarioEscaneadoDosVeces(limpio, ahora)) {
-    input.value = '';
-    resetEscaneoInventario();
-    filtrarInventario();
-    showMsg('inv-msg', `Busqueda limpiada: ${limpio} escaneado dos veces.`, 'ok');
+    limpiarBusquedaInventarioPorDoble(input, limpio);
     return;
   }
 
@@ -1092,31 +1160,15 @@ window.filtrarInventario = function(desdeBusqueda = false) {
   const valor = input?.value || '';
   const limpio = limpiarCodigo(valor);
   const ahora = Date.now();
-  const esDobleCodigoPegado = !!(invUltimoCodigoEscaneado &&
-    limpio === invUltimoCodigoEscaneado + invUltimoCodigoEscaneado &&
-    ahora - invUltimoCodigoEscaneadoEn <= INV_SCAN_CLEAR_MS);
-  if (desdeBusqueda && (esDobleCodigoPegado || (limpio && codigoInventarioEscaneadoDosVeces(limpio, ahora)))) {
-    const normalizado = valor.trim();
-    if (esDobleCodigoPegado || normalizado === limpio) {
-      const codigoLimpiado = esDobleCodigoPegado ? invUltimoCodigoEscaneado : limpio;
-      input.value = '';
-      resetEscaneoInventario();
-      invFiltro = '';
-      invCodigoFiltro = $('inv-codigo-filtro')?.value || 'todos';
-      invCategoriaFiltro = $('inv-categoria-filtro')?.value || '';
-      invPagina = 0;
-      renderInventarioPaginado();
-      showMsg('inv-msg', `Busqueda limpiada: ${codigoLimpiado} escaneado dos veces.`, 'ok');
-      return;
-    }
+  const codigoDoble = codigoDobleEscaneoDesdeValor(limpio, invUltimoCodigoEscaneado, invUltimoCodigoEscaneadoEn, ahora);
+  if (desdeBusqueda && codigoDoble) {
+    limpiarBusquedaInventarioPorDoble(input, codigoDoble);
+    return;
   }
   invFiltro = valor.toLowerCase().trim();
   invCodigoFiltro = $('inv-codigo-filtro')?.value || 'todos';
   invCategoriaFiltro = $('inv-categoria-filtro')?.value || '';
-  const productoExacto = limpio && productoConCodigo(limpio);
-  if (productoExacto || valorPareceCodigoEscaneado(valor)) {
-    registrarCodigoInventarioEscaneado(limpio, ahora);
-  } else if (!limpio || (invUltimoCodigoEscaneado && ahora - invUltimoCodigoEscaneadoEn > INV_SCAN_CLEAR_MS)) {
+  if (!limpio || (invUltimoCodigoEscaneado && ahora - invUltimoCodigoEscaneadoEn > INV_SCAN_CLEAR_MS)) {
     resetEscaneoInventario();
   }
   invPagina = 0;
@@ -1937,8 +1989,15 @@ function completarEscaneoBarras(codigo, motor = 'lector') {
     aplicarCodigoEscaneadoInventario(limpio, motor);
   } else if (scannerDestino === 'venta') {
     const input = $('venta-buscar');
-    input.value = limpio;
+    const ahora = Date.now();
+    if (codigoVentaEscaneadoDosVeces(limpio, ahora)) {
+      limpiarBusquedaVentaPorDoble(input, limpio);
+      window.cerrarEscanerBarras();
+      return true;
+    }
+    if (input) input.value = limpio;
     const exacto = ventaItemConCodigoExacto(limpio);
+    registrarCodigoVentaEscaneado(limpio, ahora);
     if (exacto) {
       abrirVentaItemExacto(exacto, limpio, motor);
     } else {
@@ -2361,13 +2420,24 @@ window.guardarEntrada = async function() {
    VENTAS / CARRITO
 ═══════════════════════════════════════════════════════ */
 window.buscarProductoVenta = async function() {
-  const q    = $('venta-buscar').value.trim();
+  const input = $('venta-buscar');
+  const q    = input.value.trim();
   const cont = $('venta-sugerencias');
-  if (q.length < 1) { cont.innerHTML = ''; return; }
+  if (q.length < 1) {
+    cont.innerHTML = '';
+    resetEscaneoVenta();
+    return;
+  }
 
   // Usa caché — no llama Firestore
   const qLow = q.toLowerCase();
   const qCode = limpiarCodigo(q);
+  const ahora = Date.now();
+  const codigoDoble = codigoDobleEscaneoDesdeValor(qCode, ventaUltimoCodigoEscaneado, ventaUltimoCodigoEscaneadoEn, ahora);
+  if (codigoDoble) {
+    limpiarBusquedaVentaPorDoble(input, codigoDoble);
+    return;
+  }
   const exacto = valorPareceCodigoEscaneado(q) ? ventaItemConCodigoExacto(qCode) : null;
   if (exacto) {
     abrirVentaItemExacto(exacto, qCode, 'lector');
@@ -2563,6 +2633,7 @@ window.confirmarAgregarCarrito = function() {
 
   closeModal('modal-cantidad');
   $('venta-buscar').value = '';
+  resetEscaneoVenta();
   renderCarrito();
 };
 
