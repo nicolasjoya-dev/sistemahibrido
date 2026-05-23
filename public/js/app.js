@@ -4513,10 +4513,6 @@ window.agregarEtiquetaCodigo = async function() {
   }
   try {
     await batch.commit();
-    if (borrarDelProducto && productoEsAncheta(p) && p.ancheta_id) {
-      await updateDoc(doc(db(), 'anchetas', p.ancheta_id), { codigo_barras: '' }).catch(() => {});
-      invalidarAnchetas();
-    }
   } catch (e) {
     showMsg('cod-msg', 'No se pudieron guardar las etiquetas en Firebase.', 'error');
     return;
@@ -4878,6 +4874,10 @@ async function borrarCodigoProductoCompleto(productoId, codigoObjetivo = '') {
 
   try {
     await batch.commit();
+    if (borrarDelProducto && productoEsAncheta(p) && p.ancheta_id) {
+      await updateDoc(doc(db(), 'anchetas', p.ancheta_id), { codigo_barras: '' }).catch(() => {});
+      invalidarAnchetas();
+    }
   } catch (e) {
     console.warn('No se pudo borrar codigo completo:', e.message || e);
     showMsg('cod-msg', 'No se pudo borrar el codigo en Firebase.', 'error');
