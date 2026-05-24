@@ -114,6 +114,11 @@ function rangoMes(anio, mes) {
   };
 }
 
+function esMesActual(anio, mes) {
+  const hoy = new Date();
+  return hoy.getFullYear() === anio && (hoy.getMonth() + 1) === mes;
+}
+
 function fechaVenta(v) {
   return v.fecha_key || fechaLocal(tsToDate(v.fecha));
 }
@@ -152,6 +157,38 @@ function resumenDesdeVentas(fecha, ventas) {
     ventas_anuladas: anuladas.length,
     total_anulado: anuladas.reduce((s, v) => s + (v.total || 0), 0)
   };
+}
+
+function numeroResumen(value) {
+  return Math.round((parseFloat(value) || 0) * 100) / 100;
+}
+
+function resumenesIguales(a = {}, b = {}) {
+  return numeroResumen(a.num_ventas) === numeroResumen(b.num_ventas) &&
+    numeroResumen(a.total_ventas) === numeroResumen(b.total_ventas) &&
+    numeroResumen(a.ganancia_total) === numeroResumen(b.ganancia_total) &&
+    numeroResumen(a.ventas_anuladas) === numeroResumen(b.ventas_anuladas) &&
+    numeroResumen(a.total_anulado) === numeroResumen(b.total_anulado);
+}
+
+async function sincronizarResumenDia(fecha, ventas, resumenActual = null) {
+  const resumen = resumenDesdeVentas(fecha, ventas);
+  if (resumenActual && resumenesIguales(resumenActual, resumen)) {
+    guardarCache(_resumenDiaCache, fecha, resumen);
+    return resumen;
+  }
+
+  try {
+    await setDoc(doc(db(), 'resumenes_diarios', fecha), {
+      ...resumen,
+      actualizado: serverTimestamp()
+    }, { merge: true });
+    _resumenMesCache.clear();
+  } catch (e) {
+    console.warn('No se pudo sincronizar resumen diario:', e.message || e);
+  }
+  guardarCache(_resumenDiaCache, fecha, resumen);
+  return resumen;
 }
 
 function resumenesDesdeVentas(ventas) {
@@ -631,10 +668,18 @@ function actualizarVentaCache(fecha, ventaId, patch) {
 
 async function getResumenesMes(anio, mes) {
   const key = mesKey(anio, mes);
-  const cached = _resumenMesCache.get(key);
-  if (cacheVigente(cached, CACHE_TTL_MS)) return cached.data;
-
   const { desde, hasta } = rangoMes(anio, mes);
+  const mesActual = esMesActual(anio, mes);
+  const cached = _resumenMesCache.get(key);
+  if (!mesActual && cacheVigente(cached, CACHE_TTL_MS)) return cached.data;
+
+  if (mesActual) {
+    const hoy = fechaLocal();
+    const resumenActual = _resumenDiaCache.get(hoy)?.data || null;
+    const ventasHoy = await getVentasPorFecha(hoy, true);
+    await sincronizarResumenDia(hoy, ventasHoy, resumenActual);
+  }
+
   const metaRef = doc(db(), 'resumenes_migraciones', key);
   let metaSnap = null;
   try {
@@ -705,11 +750,13 @@ async function loadDashboard() {
 
   // Paralelo: productos (caché) + ventas hoy (siempre fresco)
   const fechaHoy = fechaLocal(hoy);
-  const [prods, resumenHoy, todasVentas] = await Promise.all([
+  const [prods, resumenGuardado, ventasHoy] = await Promise.all([
     getProductos(),
     asegurarResumenDia(fechaHoy),
-    getVentasRecientesHoy()
+    getVentasHoy(true)
   ]);
+  const resumenHoy = await sincronizarResumenDia(fechaHoy, ventasHoy, resumenGuardado);
+  const todasVentas = ventasHoy.slice(0, DASH_VENTAS_LIMIT);
   productos = prods;
 
   const alertas = prods.filter(p => !productoEsAncheta(p) && p.stock <= p.stock_minimo);
@@ -3013,7 +3060,7 @@ window.cargarInformes = async function() {
    CIERRE DEL DÍA
 ═══════════════════════════════════════════════════════ */
 window.ejecutarCierre = async function() {
-  const todasVentas = await getVentasHoy();
+  const todasVentas = await getVentasHoy(true);
   const ventas = todasVentas.filter(v => !v.anulada);
   if (ventas.length === 0) { alert('No hay ventas válidas registradas hoy.'); return; }
 
@@ -3022,16 +3069,28 @@ window.ejecutarCierre = async function() {
   const desglose      = {};
 
   ventas.forEach(v => {
-    (v.items || []).forEach(item => {
+    const items = v.items || [];
+    const subtotalItems = items.reduce((s, item) => {
+      const cantidad = parseFloat(item.cantidad) || 0;
+      return s + (cantidad * (parseFloat(item.precio_unitario) || 0));
+    }, 0);
+    const gananciaRealVenta = gananciaVenta(v);
+
+    items.forEach(item => {
       const k = item.nombre_producto;
+      const cantidad = parseFloat(item.cantidad) || 0;
+      const ventaItem = cantidad * (parseFloat(item.precio_unitario) || 0);
+      const gananciaItem = subtotalItems > 0
+        ? gananciaRealVenta * (ventaItem / subtotalItems)
+        : 0;
       if (!desglose[k]) desglose[k] = { vendido: 0, ganancia: 0 };
-      desglose[k].vendido  += item.cantidad;
-      desglose[k].ganancia += item.cantidad * ((item.precio_unitario || 0) - (item.precio_compra || 0));
+      desglose[k].vendido  += cantidad;
+      desglose[k].ganancia += gananciaItem;
     });
   });
 
   const detalle    = Object.entries(desglose).map(([nombre, d]) => ({ nombre, ...d }));
-  const ganancia   = detalle.reduce((s, d) => s + d.ganancia, 0);
+  const ganancia   = ventas.reduce((s, v) => s + gananciaVenta(v), 0);
   const masVendidoItem = [...detalle].sort((a, b) => b.vendido - a.vendido)[0] || null;
   const masVendido = masVendidoItem?.nombre || '---';
   const masVendidoCantidad = masVendidoItem?.vendido || 0;
@@ -3045,6 +3104,7 @@ window.ejecutarCierre = async function() {
     producto_mas_vendido_cantidad: masVendidoCantidad,
     creado: serverTimestamp()
   });
+  await sincronizarResumenDia(hoy, todasVentas);
 
   $('cierre-resultado').style.display = 'block';
   $('cierre-stats').innerHTML = `
